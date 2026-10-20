@@ -1,47 +1,60 @@
 # 🛡️ Sentinel — DevSecOps Unified Scanner
 
-A unified CLI + IDE security scanner orchestrating SAST, SCA, Secrets, IaC, DAST, and resilience scanning with cross-tool deduplication, reachability-based risk scoring, and inline auto-remediation.
+[![CI](https://github.com/DraculaHub786/DevSecOps-Unified-Scanner/actions/workflows/ci.yml/badge.svg)](https://github.com/DraculaHub786/DevSecOps-Unified-Scanner/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Go Report Card](https://goreportcard.com/badge/github.com/DraculaHub786/DevSecOps-Unified-Scanner)](https://goreportcard.com/report/github.com/DraculaHub786/DevSecOps-Unified-Scanner)
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                        CLIENTS                              │
-│  ┌──────────────┐   ┌──────────────────┐   ┌──────────────┐ │
-│  │     CLI      │   │ VS Code Extension│   │  CI / Action │ │
-│  └──────┬───────┘   └────────┬─────────┘   └──────┬───────┘ │
-└─────────┼────────────────────┼────────────────────┼─────────┘
-          │                    │                    │
-          └─────────────┬──────┴────────────────────┘
-                        ▼
-         ┌──────────────────────────────┐
-         │  Orchestration Engine (Core) │
-         │  • Job Scheduler             │
-         │  • Multi-Scanner Adapters    │
-         │  • Deduplication & Fusion    │
-         │  • Contextual Risk Scoring   │
-         │  • Auto-Remediation Engine   │
-         └──────────────┬───────────────┘
-                        │
-         ┌──────────────┴──────────────┐
-         ▼                             ▼
-  Scanner Adapters              Storage & Reports
-  • Semgrep (SAST)              • SARIF 2.1.0 Standard
-  • Gitleaks (Secrets)          • SQLite (.sentinel/history.db)
-  • OSV-Scanner (SCA)           • Markdown PR Comments
-  • Trivy (IaC/Containers)      • Machine-Readable JSON
-  • Nuclei (DAST Passive)       • Terminal ANSI Dashboards
-  • Resilience/DoS Engine
-```
+A unified local-first DevSecOps security scanner orchestrating industry-standard engines (**Semgrep**, **Gitleaks**, **OSV-Scanner**, **Trivy**, **Nuclei**) behind a single interface. Sentinel correlates alerts, eliminates cross-tool duplicate findings, calculates contextual risk scores, and suggests actionable remediations without sending your code to any third party.
+
+---
+
+## 🧭 Documentation & Architecture
+
+- 📐 **[Architecture & Build Guide](docs/architecture.md)** — Core pipelines, engine adapters, and design principles.
+- 🧮 **[Contextual Risk Scoring](docs/risk-scoring.md)** — Mathematical formula and weighting models.
+- 🔒 **[Security Policy](SECURITY.md)** — Vulnerability reporting and network safety invariants.
+- 🤝 **[Contributing Guide](CONTRIBUTING.md)** — Development standards and commit conventions.
 
 ---
 
 ## ⚡ Key Highlights
 
-- **100% Local-First by Default**: Scans execute locally in your terminal or editor. No source code or decrypted secrets ever leave your environment.
-- **Cross-Scanner Deduplication**: Correlates alerts across tools (e.g. Trivy and OSV flagging the same CVE), merging duplicates and prioritizing the highest severity.
-- **Contextual Risk Scoring (0–100)**: Adjusts base CVSS severity with reachability analysis (is the vulnerable package called in your code?), exposure heuristic (public API vs internal test), and exploitability.
-- **Actionable Remediation**: Generates instant dependency version bump diffs, `.gitignore` entries, and security refactorings.
-- **Native VS Code Integration**: Squiggles in the Problems panel, lightbulb Quick Fixes, an interactive severity tree view, and live status bar tracking.
-- **CI/CD Ready**: Exits with code `1` when findings exceed your `--fail-on` threshold, with native SARIF 2.1.0 export for GitHub/GitLab Code Scanning.
+- **100% Local-First by Default**: Scans execute locally in your terminal or IDE daemon. Zero code, lockfiles, or decrypted secrets leave your machine.
+- **Honest Engine Provenance (Full vs. Lite Mode)**:
+  - **Full Mode**: Uses external production tools (`Semgrep`, `Gitleaks`, `OSV-Scanner`, `Trivy`, `Nuclei`) with separate stdout/stderr execution and exit code checks.
+  - **Embedded Lite Mode**: Built-in fallback engines run when external tools are absent, transparently tagged as `engine: embedded` / `lite` in all reports.
+  - **CI Lite Gating**: Running in `--ci` mode halts with exit code `2` if missing engines fall back to lite mode, unless `--allow-lite` is explicitly permitted.
+- **Cross-Scanner Deduplication**: Fuses overlapping findings (e.g. Trivy and OSV-Scanner flagging the same CVE), preserving the highest severity and richest remediation.
+- **Contextual Risk Scoring (0–100)**: Weights base CVSS severity against reachability (is the vulnerable package called in your code?), exposure heuristic (public route vs internal test file), and exploitability.
+- **Safe & Guarded DAST**: Dynamic web tests are strictly passive by default and require legal authorization acknowledgment (`--i-have-authorization`), domain allowlists, and private IP blocks.
+- **Baseline & History Tracking**: Accept existing flaws into a baseline (`sentinel baseline`) so subsequent runs only fail on new findings. Query and diff past scans via local SQLite store (`sentinel history`, `sentinel diff`).
+- **Software Bill of Materials (SBOM)**: Native generation in CycloneDX and SPDX format via `sentinel sbom`.
+
+---
+
+## 🛠️ Command Reference
+
+| Command | Purpose |
+| :--- | :--- |
+| `sentinel scan [path]` | Full unified scan (`--only`, `--skip`, `--changed-only`, `--baseline`, `--allow-lite`) |
+| `sentinel doctor` | Inspect external engine availability, versions, and full vs lite status |
+| `sentinel baseline [path]` | Accept current findings into `.sentinel/baseline.json` |
+| `sentinel history` | View chronological scan history from `.sentinel/history.db` |
+| `sentinel diff <a> <b>` | Compare two historical scans (identifies new, fixed, and unchanged flaws) |
+| `sentinel report <id> --format` | Re-render a stored scan in `sarif`, `html`, `markdown`, or `json` |
+| `sentinel suppress <id> --reason` | Suppress a finding in `.sentinel.yml` with mandatory justification |
+| `sentinel sbom [path]` | Generate CycloneDX or SPDX Software Bill of Materials |
+| `sentinel image <name>` | Scan container images for vulnerabilities via Trivy |
+| `sentinel dast --target URL` | Passive DAST scanning with mandatory authorization check |
+| `sentinel threat-model [path]`| Discover entry points, ports, data stores, and STRIDE threat matrix |
+| `sentinel secrets [path]` | Shortcut: Secrets scanning |
+| `sentinel deps [path]` | Shortcut: Dependency vulnerability scanning (SCA) |
+| `sentinel sast [path]` | Shortcut: Static application security testing (SAST) |
+| `sentinel iac [path]` | Shortcut: Infrastructure as Code & Dockerfile misconfiguration |
+| `sentinel explain <id>` | View rule rationale, CWE advisory links, and guidance |
+| `sentinel fix <id> [--apply]` | Preview or apply automated code patch / dependency bump |
+| `sentinel watch [path]` | Incremental scan on file modifications |
+| `sentinel install-hooks` | Install pre-commit hook preventing commits with high/critical flaws |
 
 ---
 
@@ -49,65 +62,38 @@ A unified CLI + IDE security scanner orchestrating SAST, SCA, Secrets, IaC, DAST
 
 ### 1. Build Binaries
 ```bash
-# Build CLI and Agent daemon
 go build -o bin/sentinel ./cmd/sentinel
 go build -o bin/sentinel-agent ./cmd/sentinel-agent
 ```
 
-### 2. Run a Scan
+### 2. Check Engine Status
 ```bash
-# Scan current repository (auto-detects languages and frameworks)
+./bin/sentinel doctor
+```
+
+### 3. Run a Scan
+```bash
+# Scan workspace with terminal output
 ./bin/sentinel scan
 
-# Fail build if High or Critical findings exist
-./bin/sentinel scan --fail-on=high --ci
+# Fail CI build on high or critical severity
+./bin/sentinel scan --ci --fail-on=high
 
-# Output SARIF 2.1.0 for GitHub Code Scanning
-./bin/sentinel scan --format=sarif --out=results.sarif
+# Output SARIF 2.1.0 and offline self-contained HTML report
+./bin/sentinel scan --format=terminal,sarif,html --out=report.html
 
-# Passive DAST scan against staging endpoint
-./bin/sentinel scan --target https://staging.myapp.com --dast
+# Only scan modified uncommitted files in git
+./bin/sentinel scan --changed-only
 ```
 
-### 3. Explain & Auto-Fix Findings
+### 4. DAST Scanning Guardrails
 ```bash
-# Inspect rule explanation, CWE link, and remediation steps
-./bin/sentinel explain SENT-531c1ae4dd0f
-
-# Preview auto-generated patch diff
-./bin/sentinel fix SENT-531c1ae4dd0f
-
-# Apply the patch diff directly to your source file
-./bin/sentinel fix SENT-531c1ae4dd0f --apply
+# Authorized passive DAST scan against allowlisted staging target
+./bin/sentinel dast --target https://staging.example.com --i-have-authorization
 ```
 
-### 4. Watch Mode (Live Re-scan on Save)
-```bash
-./bin/sentinel watch
-```
-
-### 5. Git Pre-Commit Hook
-```bash
-./bin/sentinel install-hooks
-```
-
----
-
-## 🧩 VS Code Extension
-
-The extension in `extension-vscode/` connects to `sentinel-agent` over local IPC:
-
-```bash
-cd extension-vscode
-npm install
-npm run compile
-```
-
-Features:
-- **Native Diagnostics**: Underlines security flaws directly in the editor.
-- **Quick Fix (💡)**: One-click preview and apply for dependency bumps.
-- **Sidebar Tree View**: Grouped by Critical, High, Medium, and Low.
-- **Hover Information**: Shows CVSS, CWE reference, and rationale on hover.
+> [!NOTE]
+> Targets must be declared in `.sentinel.yml` under `scanners.dast.allowlist`. Targets resolving to private (`10.0.0.0/8`, `192.168.0.0/16`) or loopback (`127.0.0.1`) addresses are refused unless `allow_private: true` is explicitly configured.
 
 ---
 
@@ -115,12 +101,16 @@ Features:
 
 ```yaml
 version: 1
+engine: "auto" # auto | external | embedded
+
+thresholds:
+  fail_on: "high" # critical | high | medium | low
+  risk_score_max: 80.0
+
 scanners:
   sast:
     enabled: true
     ruleset: "auto"
-    extra_rules:
-      - "rules/sast-rules.yml"
   secrets:
     enabled: true
     scan_history: false
@@ -131,7 +121,9 @@ scanners:
     enabled: true
   dast:
     enabled: false
-    target: "https://staging.myapp.com"
+    allowlist:
+      - staging.example.com
+    allow_private: false
   resilience:
     enabled: true
 
@@ -140,38 +132,48 @@ ignore:
     - "vendor/**"
     - "node_modules/**"
     - "dist/**"
-    - "**/*_test.go"
-  findings: []
-
-thresholds:
-  fail_on: "high" # critical | high | medium | low
+  findings:
+    - id: "SENT-0119773a7723"
+      reason: "Synthetic test token used in fixture"
+      expires: "2099-01-01"
 
 output:
-  formats: ["terminal", "sarif", "markdown"]
+  formats: ["terminal", "sarif", "html"]
   path: ".sentinel/reports/"
 ```
 
 ---
 
-## 🧪 Verification & Evidence
+## 🧩 VS Code Extension
 
-Run unit and integration tests:
+The extension in `extension-vscode/` connects to `sentinel-agent` over local IPC authenticated via cryptographic session tokens:
+
+```bash
+cd extension-vscode
+npm install
+npm run compile
+```
+
+- **Inline Diagnostics**: Highlighting flaws with severity and engine provenance (`[Sentinel SAST (external)]` vs `[Sentinel SAST (embedded)]`).
+- **Status Bar Indicator**: Live display of scan status and operational mode (`Sentinel [Full]: Clean` or `Sentinel [Lite]: 2 🚨 3 ⚠️`).
+- **Interactive Hover**: Displays STRIDE category, CVSS, and external tool verification status.
+
+---
+
+## 🧪 Verification
+
+Run the comprehensive unit test suite:
 ```bash
 go test -v ./...
-```
-Output:
-```
-=== RUN   TestCorrelateAndDeduplicate
---- PASS: TestCorrelateAndDeduplicate (0.00s)
-=== RUN   TestCalculateRiskScore
---- PASS: TestCalculateRiskScore (0.00s)
-=== RUN   TestGenerateSARIF
---- PASS: TestGenerateSARIF (0.00s)
-PASS
 ```
 
 Scan the intentionally vulnerable test fixture:
 ```bash
 ./bin/sentinel scan testdata/vulnerable-app --format=terminal
 ```
-Detects secrets (Gitleaks), command injection & TLS misconfiguration (Semgrep), vulnerable dependencies (OSV), container root user & open ingress (Trivy), and unbounded body reads / missing timeouts (Resilience) in **under 30 milliseconds**.
+
+---
+
+## 📄 License
+
+Apache License 2.0. See [LICENSE](LICENSE) for full details.

@@ -3,8 +3,8 @@ package adapters
 import (
 	"context"
 
-	"github.com/sentinel-dev/sentinel/internal/config"
-	"github.com/sentinel-dev/sentinel/internal/orchestrator"
+	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/config"
+	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/orchestrator"
 )
 
 // Adapter is the common interface implemented by all scanner plugins.

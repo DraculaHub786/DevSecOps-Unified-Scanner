@@ -12,8 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sentinel-dev/sentinel/internal/config"
-	"github.com/sentinel-dev/sentinel/internal/orchestrator"
+	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/adapters"
+	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/config"
+	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/orchestrator"
 )
 
 // SemgrepAdapter executes Semgrep for static application security testing (SAST),
@@ -65,20 +66,29 @@ func (a *SemgrepAdapter) Run(ctx context.Context, repoPath string, cfg *config.C
 	}
 
 	binPath, err := exec.LookPath("semgrep")
-	if err == nil && binPath != "" {
-		return a.runCLI(ctx, binPath, repoPath, cfg)
+	if err != nil || binPath == "" {
+		if cfg.Engine == "external" {
+			return nil, fmt.Errorf("semgrep executable not found in PATH and engine is configured as 'external'")
+		}
+		return a.runNativeFallback(repoPath, cfg)
 	}
 
-	return a.runNativeFallback(repoPath, cfg)
+	return a.runCLI(ctx, binPath, repoPath, cfg)
 }
 
 func (a *SemgrepAdapter) runCLI(ctx context.Context, binPath, repoPath string, cfg *config.Config) ([]orchestrator.Finding, error) {
-	args := []string{"scan", "--json", "--quiet"}
+	args := []string{"scan", "--json", "--quiet", "--metrics=off"}
 
-	if cfg.Scanners.SAST.Ruleset != "" {
+	if cfg.Scanners.SAST.Ruleset != "" && cfg.Scanners.SAST.Ruleset != "auto" {
 		args = append(args, "--config", cfg.Scanners.SAST.Ruleset)
 	} else {
-		args = append(args, "--config", "auto")
+		// Use local rules if available or auto
+		localRules := filepath.Join(repoPath, "rules")
+		if fi, err := os.Stat(localRules); err == nil && fi.IsDir() {
+			args = append(args, "--config", localRules)
+		} else {
+			args = append(args, "--config", "auto")
+		}
 	}
 
 	for _, extraRule := range cfg.Scanners.SAST.ExtraRules {
@@ -90,12 +100,28 @@ func (a *SemgrepAdapter) runCLI(ctx context.Context, binPath, repoPath string, c
 
 	args = append(args, repoPath)
 
-	cmd := exec.CommandContext(ctx, binPath, args...)
-	output, _ := cmd.CombinedOutput()
+	toolRes, err := adapters.RunTool(ctx, binPath, args...)
+	if err != nil {
+		return nil, fmt.Errorf("semgrep failed to execute: %w", err)
+	}
 
+	// Exit code 0 (clean) and exit code 1 (findings found) are standard. 2+ is a runtime error.
+	if toolRes.ExitCode >= 2 {
+		errLine := strings.TrimSpace(string(toolRes.Stderr))
+		if len(errLine) > 120 {
+			errLine = errLine[:117] + "..."
+		}
+		return nil, fmt.Errorf("semgrep exited with error code %d: %s", toolRes.ExitCode, errLine)
+	}
+
+	return ParseOutput(toolRes.Stdout, repoPath, cfg)
+}
+
+// ParseOutput parses raw JSON from Semgrep and maps it into normalized findings.
+func ParseOutput(data []byte, repoPath string, cfg *config.Config) ([]orchestrator.Finding, error) {
 	var report semgrepOutput
-	if err := json.Unmarshal(output, &report); err != nil {
-		return a.runNativeFallback(repoPath, cfg)
+	if err := json.Unmarshal(data, &report); err != nil {
+		return nil, fmt.Errorf("failed to parse semgrep JSON output: %w", err)
 	}
 
 	findings := make([]orchestrator.Finding, 0, len(report.Results))
@@ -133,6 +159,7 @@ func (a *SemgrepAdapter) runCLI(ctx context.Context, binPath, repoPath string, c
 		f := orchestrator.Finding{
 			ID:          findingID,
 			Source:      "semgrep",
+			Engine:      orchestrator.EngineExternal,
 			Category:    orchestrator.CategorySAST,
 			Rule:        res.CheckID,
 			Severity:    sev,
@@ -148,10 +175,6 @@ func (a *SemgrepAdapter) runCLI(ctx context.Context, binPath, repoPath string, c
 		f.RiskScore = orchestrator.CalculateRiskScore(&f)
 		f.FixSuggestion = orchestrator.GenerateRemediation(repoPath, &f)
 		findings = append(findings, f)
-	}
-
-	if len(findings) == 0 {
-		return a.runNativeFallback(repoPath, cfg)
 	}
 
 	return findings, nil
@@ -266,6 +289,7 @@ func (a *SemgrepAdapter) runNativeFallback(repoPath string, cfg *config.Config) 
 					f := orchestrator.Finding{
 						ID:          findingID,
 						Source:      "semgrep",
+						Engine:      orchestrator.EngineEmbedded,
 						Category:    orchestrator.CategorySAST,
 						Rule:        r.ID,
 						Severity:    r.Severity,

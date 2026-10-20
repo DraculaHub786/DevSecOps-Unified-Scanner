@@ -11,8 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sentinel-dev/sentinel/internal/config"
-	"github.com/sentinel-dev/sentinel/internal/orchestrator"
+	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/adapters"
+	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/config"
+	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/orchestrator"
 )
 
 // OSVAdapter wraps osv-scanner for SCA / dependency vulnerability detection,
@@ -41,6 +42,10 @@ type osvScanOutput struct {
 			Path string `json:"path"`
 			Type string `json:"type"`
 		} `json:"source"`
+		PackageSource struct {
+			Path string `json:"path"`
+			Type string `json:"type"`
+		} `json:"package_source"`
 		Packages []struct {
 			Package struct {
 				Name      string `json:"name"`
@@ -67,27 +72,47 @@ func (a *OSVAdapter) Run(ctx context.Context, repoPath string, cfg *config.Confi
 	}
 
 	binPath, err := exec.LookPath("osv-scanner")
-	if err == nil && binPath != "" {
-		return a.runCLI(ctx, binPath, repoPath, cfg, discovery)
+	if err != nil || binPath == "" {
+		if cfg.Engine == "external" {
+			return nil, fmt.Errorf("osv-scanner executable not found in PATH and engine is configured as 'external'")
+		}
+		return a.runNativeFallback(repoPath, cfg, discovery)
 	}
 
-	return a.runNativeFallback(repoPath, cfg, discovery)
+	return a.runCLI(ctx, binPath, repoPath, cfg, discovery)
 }
 
 func (a *OSVAdapter) runCLI(ctx context.Context, binPath, repoPath string, cfg *config.Config, discovery *orchestrator.DiscoveryResult) ([]orchestrator.Finding, error) {
-	cmd := exec.CommandContext(ctx, binPath, "--format", "json", "-r", repoPath)
-	output, _ := cmd.CombinedOutput()
+	toolRes, err := adapters.RunTool(ctx, binPath, "--format", "json", "-r", repoPath)
+	if err != nil {
+		return nil, fmt.Errorf("osv-scanner failed to execute: %w", err)
+	}
 
+	// OSV-scanner returns 0 for clean, 1 when vulnerabilities are identified. 2+ is error.
+	if toolRes.ExitCode >= 2 {
+		errLine := strings.TrimSpace(string(toolRes.Stderr))
+		return nil, fmt.Errorf("osv-scanner exited with error %d: %s", toolRes.ExitCode, errLine)
+	}
+
+	return a.ParseOutput(toolRes.Stdout, repoPath, cfg)
+}
+
+// ParseOutput parses raw JSON output from osv-scanner and creates normalized findings.
+func (a *OSVAdapter) ParseOutput(data []byte, repoPath string, cfg *config.Config) ([]orchestrator.Finding, error) {
 	var report osvScanOutput
-	if err := json.Unmarshal(output, &report); err != nil {
-		return a.runNativeFallback(repoPath, cfg, discovery)
+	if err := json.Unmarshal(data, &report); err != nil {
+		return nil, fmt.Errorf("failed to parse osv-scanner JSON output: %w", err)
 	}
 
 	var findings []orchestrator.Finding
 	for _, res := range report.Results {
-		relFile, _ := filepath.Rel(repoPath, res.Source.Path)
-		if relFile == "" {
-			relFile = res.Source.Path
+		srcPath := res.Source.Path
+		if srcPath == "" {
+			srcPath = res.PackageSource.Path
+		}
+		relFile, _ := filepath.Rel(repoPath, srcPath)
+		if relFile == "" || relFile == "." {
+			relFile = srcPath
 		}
 		relFile = filepath.ToSlash(relFile)
 
@@ -108,7 +133,7 @@ func (a *OSVAdapter) runCLI(ctx context.Context, binPath, repoPath string, cfg *
 				sev := orchestrator.SeverityHigh
 				cvss := 7.5
 
-				// Check reachability
+				// Check reachability with heuristic label
 				reachable := a.checkReachability(pkg.Package.Name, repoPath)
 
 				findingID := orchestrator.GenerateID("osv", cve, relFile, 1)
@@ -118,12 +143,15 @@ func (a *OSVAdapter) runCLI(ctx context.Context, binPath, repoPath string, cfg *
 
 				msg := vuln.Summary
 				if msg == "" {
-					msg = fmt.Sprintf("Vulnerable dependency %s@%s has known security advisory %s", pkg.Package.Name, pkg.Package.Version, cve)
+					msg = fmt.Sprintf("Vulnerable dependency %s@%s has advisory %s [Reachability: heuristic]", pkg.Package.Name, pkg.Package.Version, cve)
+				} else {
+					msg = fmt.Sprintf("%s [Reachability: heuristic]", msg)
 				}
 
 				f := orchestrator.Finding{
 					ID:          findingID,
 					Source:      "osv",
+					Engine:      orchestrator.EngineExternal,
 					Category:    orchestrator.CategorySCA,
 					Rule:        cve,
 					Severity:    sev,
@@ -142,10 +170,6 @@ func (a *OSVAdapter) runCLI(ctx context.Context, binPath, repoPath string, cfg *
 				findings = append(findings, f)
 			}
 		}
-	}
-
-	if len(findings) == 0 {
-		return a.runNativeFallback(repoPath, cfg, discovery)
 	}
 
 	return findings, nil
@@ -261,6 +285,7 @@ func (a *OSVAdapter) runNativeFallback(repoPath string, cfg *config.Config, disc
 							f := orchestrator.Finding{
 								ID:          findingID,
 								Source:      "osv",
+								Engine:      orchestrator.EngineEmbedded,
 								Category:    orchestrator.CategorySCA,
 								Rule:        dbEntry.CVE,
 								Severity:    dbEntry.Severity,
@@ -269,7 +294,7 @@ func (a *OSVAdapter) runNativeFallback(repoPath string, cfg *config.Config, disc
 								File:        manifest,
 								LineStart:   idx + 1,
 								LineEnd:     idx + 1,
-								Message:     fmt.Sprintf("%s (%s@%s) - Upgrade package to %s", dbEntry.Description, dbEntry.Package, ver, dbEntry.FixedVer),
+								Message:     fmt.Sprintf("%s (%s@%s) - Upgrade package to %s [Reachability: heuristic] [Embedded Lite Engine: install osv-scanner for full advisory coverage]", dbEntry.Description, dbEntry.Package, ver, dbEntry.FixedVer),
 								Reachable:   &reachable,
 								FirstSeen:   time.Now().UTC(),
 								Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategorySCA, dbEntry.CVE, manifest, dbEntry.Package),
@@ -299,6 +324,7 @@ func (a *OSVAdapter) runNativeFallback(repoPath string, cfg *config.Config, disc
 							f := orchestrator.Finding{
 								ID:          findingID,
 								Source:      "osv",
+								Engine:      orchestrator.EngineEmbedded,
 								Category:    orchestrator.CategorySCA,
 								Rule:        dbEntry.CVE,
 								Severity:    dbEntry.Severity,
@@ -307,7 +333,7 @@ func (a *OSVAdapter) runNativeFallback(repoPath string, cfg *config.Config, disc
 								File:        manifest,
 								LineStart:   idx + 1,
 								LineEnd:     idx + 1,
-								Message:     fmt.Sprintf("%s (%s==%s) - Upgrade package to %s", dbEntry.Description, dbEntry.Package, ver, dbEntry.FixedVer),
+								Message:     fmt.Sprintf("%s (%s==%s) - Upgrade package to %s [Reachability: heuristic] [Embedded Lite Engine: install osv-scanner for full advisory coverage]", dbEntry.Description, dbEntry.Package, ver, dbEntry.FixedVer),
 								Reachable:   &reachable,
 								FirstSeen:   time.Now().UTC(),
 								Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategorySCA, dbEntry.CVE, manifest, dbEntry.Package),

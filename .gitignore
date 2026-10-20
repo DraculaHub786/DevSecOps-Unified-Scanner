@@ -24,9 +24,9 @@ yarn-error.log*
 extension-vscode/dist/
 
 # Sentinel runtime local history & reports
-.sentinel/history.db
-.sentinel/reports/
-results.sarif
+**/.sentinel/
+*.sarif
+*.cdx.json
 summary.md
 
 # Environment variables & local secrets

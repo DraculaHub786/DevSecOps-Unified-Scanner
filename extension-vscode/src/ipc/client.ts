@@ -1,8 +1,12 @@
 import * as net from 'net';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
 
 export interface Finding {
     id: string;
     source: string;
+    engine?: string;
     category: string;
     rule: string;
     severity: string;
@@ -26,6 +30,22 @@ export interface Finding {
 export class AgentClient {
     constructor(private host: string = '127.0.0.1', private port: number = 48921) {}
 
+    private getSessionToken(): string {
+        const cacheDir = process.platform === 'win32'
+            ? process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local')
+            : process.env.XDG_CACHE_HOME || path.join(os.homedir(), '.cache');
+
+        const tokenPath = path.join(cacheDir, 'sentinel', 'agent.token');
+        try {
+            if (fs.existsSync(tokenPath)) {
+                return fs.readFileSync(tokenPath, 'utf8').trim();
+            }
+        } catch {
+            // ignore
+        }
+        return '';
+    }
+
     private sendRequest<T>(method: string, params: any): Promise<T> {
         return new Promise((resolve, reject) => {
             const socket = new net.Socket();
@@ -37,6 +57,7 @@ export class AgentClient {
                 const req = {
                     jsonrpc: '2.0',
                     id: Date.now(),
+                    token: this.getSessionToken(),
                     method,
                     params
                 };

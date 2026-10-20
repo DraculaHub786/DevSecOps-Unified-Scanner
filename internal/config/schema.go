@@ -3,6 +3,7 @@ package config
 // Config represents the top-level configuration loaded from .sentinel.yml.
 type Config struct {
 	Version    int             `yaml:"version"`
+	Engine     string          `yaml:"engine"` // auto | external | embedded
 	Scanners   ScannersConfig  `yaml:"scanners"`
 	Ignore     IgnoreConfig    `yaml:"ignore"`
 	Thresholds ThresholdConfig `yaml:"thresholds"`
@@ -46,8 +47,10 @@ type IaCConfig struct {
 
 // DASTConfig options for Nuclei / dynamic analysis.
 type DASTConfig struct {
-	Enabled bool   `yaml:"enabled"`
-	Target  string `yaml:"target"`
+	Enabled      bool     `yaml:"enabled"`
+	Target       string   `yaml:"target"`
+	Allowlist    []string `yaml:"allowlist"`
+	AllowPrivate bool     `yaml:"allow_private"`
 }
 
 // ResilienceConfig options for posture checks.
@@ -55,15 +58,23 @@ type ResilienceConfig struct {
 	Enabled bool `yaml:"enabled"`
 }
 
-// IgnoreConfig defines exclusions for paths and finding IDs.
+// FindingSuppression defines an explicit suppression with mandatory justification reason.
+type FindingSuppression struct {
+	ID      string `yaml:"id"`
+	Reason  string `yaml:"reason"`            // required justification comment
+	Expires string `yaml:"expires,omitempty"` // optional expiration date YYYY-MM-DD
+}
+
+// IgnoreConfig defines exclusions for paths and finding suppressions.
 type IgnoreConfig struct {
-	Paths    []string `yaml:"paths"`
-	Findings []string `yaml:"findings"`
+	Paths    []string             `yaml:"paths"`
+	Findings []FindingSuppression `yaml:"findings"`
 }
 
 // ThresholdConfig defines build failure gating criteria.
 type ThresholdConfig struct {
-	FailOn string `yaml:"fail_on"` // critical | high | medium | low
+	FailOn       string  `yaml:"fail_on"`                  // critical | high | medium | low
+	RiskScoreMax float64 `yaml:"risk_score_max,omitempty"` // fail if any finding risk score exceeds this value
 }
 
 // OutputConfig defines report formats and storage path.
@@ -82,6 +93,7 @@ type CloudConfig struct {
 func DefaultConfig() *Config {
 	return &Config{
 		Version: 1,
+		Engine:  "auto",
 		Scanners: ScannersConfig{
 			SAST: SASTConfig{
 				Enabled: true,
@@ -92,7 +104,7 @@ func DefaultConfig() *Config {
 			},
 			Secrets: SecretsConfig{
 				Enabled:     true,
-				ScanHistory: false, // fast default for local working tree
+				ScanHistory: false,
 			},
 			SCA: SCAConfig{
 				Enabled:       true,
@@ -102,8 +114,10 @@ func DefaultConfig() *Config {
 				Enabled: true,
 			},
 			DAST: DASTConfig{
-				Enabled: false,
-				Target:  "",
+				Enabled:      false,
+				Target:       "",
+				Allowlist:    []string{},
+				AllowPrivate: false,
 			},
 			Resilience: ResilienceConfig{
 				Enabled: true,
@@ -116,10 +130,11 @@ func DefaultConfig() *Config {
 				"dist/**",
 				"build/**",
 				".git/**",
-				".sentinel/**",
+				"**/.sentinel/**",
+				"testdata/**",
 				"**/*_test.go",
 			},
-			Findings: []string{},
+			Findings: []FindingSuppression{},
 		},
 		Thresholds: ThresholdConfig{
 			FailOn: "high",

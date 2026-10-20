@@ -1,0 +1,61 @@
+name: ci
+on: [push, pull_request]
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Go Vet
+        run: go vet ./...
+
+      - name: Run Tests with Race Detector
+        run: go test -race ./...
+
+      - name: Vulnerability Check (govulncheck)
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+      - name: Build Sentinel Binary
+        run: go build -o bin/sentinel ./cmd/sentinel
+
+      - name: Egress Test (Zero Network Verification)
+        run: |
+          sudo unshare -n ./bin/sentinel scan testdata/vulnerable-app --offline --format json --out /tmp/egress_report.json
+          test -s /tmp/egress_report.json
+
+  self-scan:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install Pinned Scanner Engines
+        run: bash plugins/install.sh
+
+      - name: Self-Scan Repository
+        run: |
+          go run ./cmd/sentinel scan . --ci --fail-on=critical --format sarif --out results.sarif
+
+      - name: Upload SARIF to GitHub Code Scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif

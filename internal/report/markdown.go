@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/sentinel-dev/sentinel/internal/orchestrator"
+	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/orchestrator"
 )
 
 // GenerateMarkdown formats scan findings into a GitHub PR comment / Markdown report.

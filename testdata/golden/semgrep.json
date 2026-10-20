@@ -1,0 +1,19 @@
+{
+  "results": [
+    {
+      "check_id": "javascript.express.security.audit.xss.direct-response-write.direct-response-write",
+      "path": "server.js",
+      "start": { "line": 42, "col": 5 },
+      "end": { "line": 42, "col": 35 },
+      "extra": {
+        "message": "User controlled data in res.send() can lead to XSS",
+        "severity": "ERROR",
+        "metadata": {
+          "cwe": "CWE-79",
+          "owasp": "A03:2021-Injection"
+        }
+      }
+    }
+  ],
+  "errors": []
+}

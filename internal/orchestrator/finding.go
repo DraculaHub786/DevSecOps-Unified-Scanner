@@ -34,10 +34,17 @@ const (
 	FixKindManualAction   = "manual-action"
 )
 
+// Engine provenance
+const (
+	EngineExternal = "external" // real tool ran (e.g., semgrep, gitleaks, trivy CLI)
+	EngineEmbedded = "embedded" // built-in lite engine ran
+)
+
 // Finding represents a unified normalized security flaw across all scanners.
 type Finding struct {
 	ID            string    `json:"id"`
 	Source        string    `json:"source"`
+	Engine        string    `json:"engine"` // "external" | "embedded"
 	Category      string    `json:"category"`
 	Rule          string    `json:"rule"`
 	Severity      string    `json:"severity"`

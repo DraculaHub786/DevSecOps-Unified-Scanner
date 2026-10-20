@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sentinel-dev/sentinel/internal/config"
-	"github.com/sentinel-dev/sentinel/internal/orchestrator"
+	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/config"
+	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/orchestrator"
 )
 
 // ResilienceAdapter conducts static posture checks for denial-of-service resilience,
@@ -158,6 +158,7 @@ func (a *ResilienceAdapter) Run(ctx context.Context, repoPath string, cfg *confi
 					f := orchestrator.Finding{
 						ID:          findingID,
 						Source:      "resilience",
+						Engine:      orchestrator.EngineEmbedded,
 						Category:    orchestrator.CategoryResilience,
 						Rule:        r.ID,
 						Severity:    r.Severity,
@@ -187,6 +188,7 @@ func (a *ResilienceAdapter) Run(ctx context.Context, repoPath string, cfg *confi
 			f := orchestrator.Finding{
 				ID:          id,
 				Source:      "resilience",
+				Engine:      orchestrator.EngineEmbedded,
 				Category:    orchestrator.CategoryResilience,
 				Rule:        "missing-rate-limiter",
 				Severity:    orchestrator.SeverityMedium,

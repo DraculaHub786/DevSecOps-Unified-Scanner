@@ -1,0 +1,25 @@
+{
+  "SchemaVersion": 2,
+  "Results": [
+    {
+      "Target": "Dockerfile",
+      "Class": "config",
+      "Type": "dockerfile",
+      "Misconfigurations": [
+        {
+          "ID": "AVD-DS-0002",
+          "Title": "Root user specified in Dockerfile",
+          "Description": "Running containers as root user can lead to privilege escalation.",
+          "Message": "Specify at least one USER instruction in Dockerfile",
+          "Resolution": "Add 'USER nonroot' to Dockerfile",
+          "Severity": "HIGH",
+          "PrimaryURL": "https://avd.aquasec.com/misconfig/ds002",
+          "CauseMetadata": {
+            "StartLine": 1,
+            "EndLine": 1
+          }
+        }
+      ]
+    }
+  ]
+}

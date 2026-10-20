@@ -12,8 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sentinel-dev/sentinel/internal/config"
-	"github.com/sentinel-dev/sentinel/internal/orchestrator"
+	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/adapters"
+	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/config"
+	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/orchestrator"
 )
 
 // TrivyAdapter executes Trivy for Container & IaC scanning, with an embedded
@@ -38,19 +39,23 @@ func (a *TrivyAdapter) IsApplicable(discovery *orchestrator.DiscoveryResult) boo
 
 type trivyOutput struct {
 	Results []struct {
-		Target          string `json:"Target"`
+		Target            string `json:"Target"`
 		Misconfigurations []struct {
-			ID          string  `json:"ID"`
-			Title       string  `json:"Title"`
-			Description string  `json:"Description"`
-			Message     string  `json:"Message"`
-			Resolution  string  `json:"Resolution"`
-			Severity    string  `json:"Severity"`
-			PrimaryURL  string  `json:"PrimaryURL"`
+			ID          string `json:"ID"`
+			Title       string `json:"Title"`
+			Description string `json:"Description"`
+			Message     string `json:"Message"`
+			Resolution  string `json:"Resolution"`
+			Severity    string `json:"Severity"`
+			PrimaryURL  string `json:"PrimaryURL"`
 			Lines       struct {
 				Start int `json:"Start"`
 				End   int `json:"End"`
 			} `json:"Lines"`
+			CauseMetadata struct {
+				StartLine int `json:"StartLine"`
+				EndLine   int `json:"EndLine"`
+			} `json:"CauseMetadata"`
 		} `json:"Misconfigurations"`
 	} `json:"Results"`
 }
@@ -61,26 +66,41 @@ func (a *TrivyAdapter) Run(ctx context.Context, repoPath string, cfg *config.Con
 	}
 
 	binPath, err := exec.LookPath("trivy")
-	if err == nil && binPath != "" {
-		return a.runCLI(ctx, binPath, repoPath, cfg)
+	if err != nil || binPath == "" {
+		if cfg.Engine == "external" {
+			return nil, fmt.Errorf("trivy executable not found in PATH and engine is configured as 'external'")
+		}
+		return a.runNativeFallback(repoPath, cfg, discovery)
 	}
 
-	return a.runNativeFallback(repoPath, cfg, discovery)
+	return a.runCLI(ctx, binPath, repoPath, cfg)
 }
 
 func (a *TrivyAdapter) runCLI(ctx context.Context, binPath, repoPath string, cfg *config.Config) ([]orchestrator.Finding, error) {
-	cmd := exec.CommandContext(ctx, binPath, "config", "--format", "json", repoPath)
-	output, _ := cmd.CombinedOutput()
+	toolRes, err := adapters.RunTool(ctx, binPath, "fs", "--format", "json", "--scanners", "misconfig", repoPath)
+	if err != nil {
+		return nil, fmt.Errorf("trivy execution failed: %w", err)
+	}
 
+	if toolRes.ExitCode >= 2 {
+		errLine := strings.TrimSpace(string(toolRes.Stderr))
+		return nil, fmt.Errorf("trivy error (exit %d): %s", toolRes.ExitCode, errLine)
+	}
+
+	return a.ParseOutput(toolRes.Stdout, repoPath, cfg)
+}
+
+// ParseOutput parses raw JSON from Trivy and maps to normalized findings.
+func (a *TrivyAdapter) ParseOutput(data []byte, repoPath string, cfg *config.Config) ([]orchestrator.Finding, error) {
 	var report trivyOutput
-	if err := json.Unmarshal(output, &report); err != nil {
-		return a.runNativeFallback(repoPath, cfg, nil)
+	if err := json.Unmarshal(data, &report); err != nil {
+		return nil, fmt.Errorf("failed to parse trivy JSON output: %w", err)
 	}
 
 	var findings []orchestrator.Finding
 	for _, res := range report.Results {
 		relFile, _ := filepath.Rel(repoPath, res.Target)
-		if relFile == "" {
+		if relFile == "" || relFile == "." {
 			relFile = res.Target
 		}
 		relFile = filepath.ToSlash(relFile)
@@ -92,7 +112,18 @@ func (a *TrivyAdapter) runCLI(ctx context.Context, binPath, repoPath string, cfg
 		for _, mis := range res.Misconfigurations {
 			startLine := mis.Lines.Start
 			if startLine <= 0 {
+				startLine = mis.CauseMetadata.StartLine
+			}
+			if startLine <= 0 {
 				startLine = 1
+			}
+
+			endLine := mis.Lines.End
+			if endLine <= 0 {
+				endLine = mis.CauseMetadata.EndLine
+			}
+			if endLine <= 0 {
+				endLine = startLine
 			}
 
 			findingID := orchestrator.GenerateID("trivy", mis.ID, relFile, startLine)
@@ -115,13 +146,14 @@ func (a *TrivyAdapter) runCLI(ctx context.Context, binPath, repoPath string, cfg
 			f := orchestrator.Finding{
 				ID:          findingID,
 				Source:      "trivy",
+				Engine:      orchestrator.EngineExternal,
 				Category:    orchestrator.CategoryIaC,
 				Rule:        mis.ID,
 				Severity:    sev,
 				CWE:         "CWE-16", // Configuration
 				File:        relFile,
 				LineStart:   startLine,
-				LineEnd:     mis.Lines.End,
+				LineEnd:     endLine,
 				Message:     fmt.Sprintf("%s: %s", mis.Title, mis.Message),
 				FirstSeen:   time.Now().UTC(),
 				Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategoryIaC, mis.ID, relFile, mis.Title),
@@ -132,11 +164,82 @@ func (a *TrivyAdapter) runCLI(ctx context.Context, binPath, repoPath string, cfg
 		}
 	}
 
-	if len(findings) == 0 {
-		return a.runNativeFallback(repoPath, cfg, nil)
+	return findings, nil
+}
+
+// ScanImage executes a container image vulnerability scan using Trivy.
+func ScanImage(ctx context.Context, imageName string) ([]orchestrator.Finding, error) {
+	binPath, err := exec.LookPath("trivy")
+	if err != nil || binPath == "" {
+		return nil, fmt.Errorf("trivy is required for container image scanning (install trivy or use docker image)")
+	}
+
+	toolRes, err := adapters.RunTool(ctx, binPath, "image", "--format", "json", imageName)
+	if err != nil {
+		return nil, fmt.Errorf("trivy image scan failed: %w", err)
+	}
+
+	var report trivyOutput
+	if err := json.Unmarshal(toolRes.Stdout, &report); err != nil {
+		return nil, fmt.Errorf("failed to parse trivy image report: %w", err)
+	}
+
+	var findings []orchestrator.Finding
+	for _, res := range report.Results {
+		for _, mis := range res.Misconfigurations {
+			f := orchestrator.Finding{
+				ID:        orchestrator.GenerateID("trivy", mis.ID, imageName, 1),
+				Source:    "trivy",
+				Engine:    orchestrator.EngineExternal,
+				Category:  orchestrator.CategoryIaC,
+				Rule:      mis.ID,
+				Severity:  strings.ToLower(mis.Severity),
+				File:      imageName,
+				LineStart: 1,
+				LineEnd:   1,
+				Message:   fmt.Sprintf("[%s] %s: %s", imageName, mis.Title, mis.Message),
+				FirstSeen: time.Now().UTC(),
+			}
+			f.RiskScore = orchestrator.CalculateRiskScore(&f)
+			findings = append(findings, f)
+		}
 	}
 
 	return findings, nil
+}
+
+// GenerateSBOM outputs a software bill of materials in CycloneDX or SPDX format.
+func GenerateSBOM(ctx context.Context, repoPath, format, outputPath string) error {
+	binPath, err := exec.LookPath("trivy")
+	if err != nil || binPath == "" {
+		return fmt.Errorf("trivy is required for SBOM generation (install trivy)")
+	}
+
+	if format == "" {
+		format = "cyclonedx"
+	}
+
+	args := []string{"fs", "--format", format}
+	if outputPath != "" {
+		args = append(args, "--output", outputPath)
+	}
+	args = append(args, repoPath)
+
+	toolRes, err := adapters.RunTool(ctx, binPath, args...)
+	if err != nil {
+		return fmt.Errorf("SBOM generation failed: %w", err)
+	}
+	if toolRes.ExitCode != 0 {
+		return fmt.Errorf("trivy sbom error (exit %d): %s", toolRes.ExitCode, string(toolRes.Stderr))
+	}
+
+	if outputPath == "" {
+		fmt.Println(string(toolRes.Stdout))
+	} else {
+		fmt.Printf("✅ SBOM successfully generated in %s format: %s\n", format, outputPath)
+	}
+
+	return nil
 }
 
 func (a *TrivyAdapter) runNativeFallback(repoPath string, cfg *config.Config, discovery *orchestrator.DiscoveryResult) ([]orchestrator.Finding, error) {
@@ -180,6 +283,7 @@ func (a *TrivyAdapter) runNativeFallback(repoPath string, cfg *config.Config, di
 					f := orchestrator.Finding{
 						ID:          findingID,
 						Source:      "trivy",
+						Engine:      orchestrator.EngineEmbedded,
 						Category:    orchestrator.CategoryIaC,
 						Rule:        "AVD-DS-0002",
 						Severity:    orchestrator.SeverityHigh,
@@ -207,6 +311,7 @@ func (a *TrivyAdapter) runNativeFallback(repoPath string, cfg *config.Config, di
 							f := orchestrator.Finding{
 								ID:          findingID,
 								Source:      "trivy",
+								Engine:      orchestrator.EngineEmbedded,
 								Category:    orchestrator.CategoryIaC,
 								Rule:        "AVD-DS-0001",
 								Severity:    orchestrator.SeverityMedium,
@@ -244,6 +349,7 @@ func (a *TrivyAdapter) runNativeFallback(repoPath string, cfg *config.Config, di
 						f := orchestrator.Finding{
 							ID:          findingID,
 							Source:      "trivy",
+							Engine:      orchestrator.EngineEmbedded,
 							Category:    orchestrator.CategoryIaC,
 							Rule:        "AVD-AWS-0107",
 							Severity:    orchestrator.SeverityHigh,

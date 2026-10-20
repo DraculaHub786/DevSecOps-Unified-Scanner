@@ -47,10 +47,11 @@ export class DiagnosticsManager {
                         break;
                 }
 
-                const msg = `[Sentinel ${f.category.toUpperCase()}] ${f.message} (Risk: ${f.risk_score}/100, Rule: ${f.rule})`;
+                const engineLabel = f.engine ? ` (${f.engine})` : '';
+                const msg = `[Sentinel ${f.category.toUpperCase()}${engineLabel}] ${f.message} (Risk: ${f.risk_score}/100, Rule: ${f.rule})`;
                 const diagnostic = new vscode.Diagnostic(range, msg, severity);
                 diagnostic.code = f.id;
-                diagnostic.source = 'Sentinel';
+                diagnostic.source = f.engine === 'embedded' ? 'Sentinel (Lite)' : 'Sentinel';
 
                 if (f.cwe) {
                     const cweId = f.cwe.replace(/^CWE-/, '');

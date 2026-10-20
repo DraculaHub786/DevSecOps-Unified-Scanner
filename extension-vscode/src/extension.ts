@@ -54,6 +54,8 @@ export function activate(context: vscode.ExtensionContext) {
                 if (matched) {
                     const md = new vscode.MarkdownString();
                     md.appendMarkdown(`### 🛡️ Sentinel: ${matched.rule}\n\n`);
+                    const engineLabel = matched.engine === 'embedded' ? '⚡ Embedded Lite Engine' : '🔬 External Tool (Production)';
+                    md.appendMarkdown(`**Engine:** \`${engineLabel}\`\n\n`);
                     md.appendMarkdown(`**Severity:** \`${matched.severity.toUpperCase()}\` | **Category:** \`${matched.category}\` | **Risk Score:** \`${matched.risk_score}/100\`\n\n`);
                     md.appendMarkdown(`${matched.message}\n\n`);
                     if (matched.cwe) {

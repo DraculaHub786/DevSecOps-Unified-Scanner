@@ -94,6 +94,11 @@ func CorrelateAndDeduplicate(findings []Finding) []Finding {
 		if existing.Exposed == nil && f.Exposed != nil {
 			existing.Exposed = f.Exposed
 		}
+
+		// 7. Engine provenance: prefer external if either tool was real external engine
+		if existing.Engine != EngineExternal && f.Engine == EngineExternal {
+			existing.Engine = EngineExternal
+		}
 	}
 
 	result := make([]Finding, 0, len(order))

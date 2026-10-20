@@ -6,7 +6,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/sentinel-dev/sentinel/internal/orchestrator"
+	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/orchestrator"
 )
 
 // ANSI color escape sequences
@@ -28,11 +28,27 @@ func RenderTerminal(w io.Writer, result *orchestrator.ScanResult, failOn string)
 	fmt.Fprintf(w, "%s%s   🛡️  SENTINEL DEVSECOPS UNIFIED SCANNER  🛡️%s\n", colorBold, colorGreen, colorReset)
 	fmt.Fprintf(w, "%s%s=========================================================================%s\n\n", colorBold, colorCyan, colorReset)
 
-	// Summary banner
-	fmt.Fprintf(w, "%sTarget:%s %s  %sDuration:%s %dms  %sTotal Scanned:%s %d files\n",
+	// Mode description
+	var extList, embList []string
+	for adName, eng := range result.Engines {
+		if eng == orchestrator.EngineExternal {
+			extList = append(extList, adName)
+		} else {
+			embList = append(embList, adName)
+		}
+	}
+
+	modeStr := fmt.Sprintf("%sMode:%s %s%s%s", colorDim, colorReset, colorGreen, strings.ToUpper(result.Mode), colorReset)
+	if result.Mode == "lite" {
+		modeStr = fmt.Sprintf("%sMode:%s %sLITE%s (embedded lite engines: %s)", colorDim, colorReset, colorYellow, colorReset, strings.Join(embList, ", "))
+	} else if len(extList) > 0 {
+		modeStr = fmt.Sprintf("%sMode:%s %sFULL%s (%d external engines: %s)", colorDim, colorReset, colorGreen, colorReset, len(extList), strings.Join(extList, ", "))
+	}
+
+	fmt.Fprintf(w, "%sTarget:%s %s  %sDuration:%s %dms  %s\n",
 		colorDim, colorReset, result.Discovery.RepoPath,
 		colorDim, colorReset, result.DurationMs,
-		colorDim, colorReset, result.Discovery.TotalFiles,
+		modeStr,
 	)
 
 	fmt.Fprintf(w, "Summary: %s%d Critical%s | %s%d High%s | %s%d Medium%s | %s%d Low%s | %d Info\n\n",
@@ -49,8 +65,8 @@ func RenderTerminal(w io.Writer, result *orchestrator.ScanResult, failOn string)
 	}
 
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintf(tw, "%sSEV\tID\tCAT\tLOCATION\tRISK\tRULE / SUMMARY%s\n", colorBold, colorReset)
-	fmt.Fprintf(tw, "%s---\t--\t---\t--------\t----\t--------------%s\n", colorDim, colorReset)
+	fmt.Fprintf(tw, "%sSEV\tID\tCAT\tENGINE\tLOCATION\tRISK\tRULE / SUMMARY%s\n", colorBold, colorReset)
+	fmt.Fprintf(tw, "%s---\t--\t---\t------\t--------\t----\t--------------%s\n", colorDim, colorReset)
 
 	for _, f := range result.Findings {
 		sevColor := colorGray
@@ -75,10 +91,16 @@ func RenderTerminal(w io.Writer, result *orchestrator.ScanResult, failOn string)
 			msg = msg[:52] + "..."
 		}
 
-		fmt.Fprintf(tw, "%s%s%s\t%s\t%s\t%s\t%.1f\t%s\n",
+		engLabel := "ext"
+		if f.Engine == orchestrator.EngineEmbedded {
+			engLabel = "lite"
+		}
+
+		fmt.Fprintf(tw, "%s%s%s\t%s\t%s\t%s\t%s\t%.1f\t%s\n",
 			sevColor, strings.ToUpper(f.Severity[:4]), colorReset,
 			f.ID,
 			f.Category,
+			engLabel,
 			location,
 			f.RiskScore,
 			msg,

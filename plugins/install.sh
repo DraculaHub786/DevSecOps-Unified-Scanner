@@ -1,29 +1,80 @@
 #!/usr/bin/env bash
-# Pinned scanner vendor script for Linux / macOS CI runners
+# Pinned scanner vendor script with SHA-256 integrity verification
 set -euo pipefail
 
 PLUGIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$PLUGIN_DIR/versions.env"
+
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
 ARCH="$(uname -m)"
 if [ "$ARCH" = "x86_64" ]; then
     ARCH="amd64"
+    ARCH_ALT="x64"
 elif [ "$ARCH" = "aarch64" ]; then
     ARCH="arm64"
+    ARCH_ALT="arm64"
 fi
 
 echo "🛡️ Installing pinned scanner binaries for $OS-$ARCH to $PLUGIN_DIR..."
 
-# 1. Gitleaks v8.18.4
-GITLEAKS_VER="8.18.4"
-curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VER}/gitleaks_${GITLEAKS_VER}_${OS}_${ARCH}.tar.gz" | tar -xz -C "$PLUGIN_DIR" gitleaks
+fetch_and_verify() {
+    local url="$1"
+    local dest="$2"
+    local filename="$3"
 
-# 2. OSV-Scanner v1.8.2
-OSV_VER="1.8.2"
-curl -sSL -o "$PLUGIN_DIR/osv-scanner" "https://github.com/google/osv-scanner/releases/download/v${OSV_VER}/osv-scanner_${OS}_${ARCH}"
+    echo "⬇️ Downloading $filename..."
+    curl -fsSL -o "$dest" "$url"
+
+    local expected_hash
+    expected_hash="$(grep -F "  $filename" "$PLUGIN_DIR/checksums.txt" | awk '{print $1}' || true)"
+
+    if [ -n "$expected_hash" ]; then
+        echo "🔍 Verifying SHA-256 for $filename..."
+        local actual_hash
+        if command -v sha256sum >/dev/null 2>&1; then
+            actual_hash="$(sha256sum "$dest" | awk '{print $1}')"
+        else
+            actual_hash="$(shasum -a 256 "$dest" | awk '{print $1}')"
+        fi
+
+        if [ "$actual_hash" != "$expected_hash" ]; then
+            echo "❌ Checksum verification failed for $filename!"
+            echo "Expected: $expected_hash"
+            echo "Got:      $actual_hash"
+            rm -f "$dest"
+            exit 1
+        fi
+        echo "✅ Checksum verified."
+    else
+        echo "⚠️ Warning: No checksum entry found for $filename, proceeding cautiously."
+    fi
+}
+
+TMP_DIR="$(mktemp -d)"
+trap 'rm -rf "$TMP_DIR"' EXIT
+
+# 1. Gitleaks
+GITLEAKS_FILE="gitleaks_${GITLEAKS_VERSION}_linux_${ARCH_ALT}.tar.gz"
+GITLEAKS_URL="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${GITLEAKS_FILE}"
+fetch_and_verify "$GITLEAKS_URL" "$TMP_DIR/$GITLEAKS_FILE" "$GITLEAKS_FILE"
+tar -xzf "$TMP_DIR/$GITLEAKS_FILE" -C "$PLUGIN_DIR" gitleaks
+chmod +x "$PLUGIN_DIR/gitleaks"
+
+# 2. OSV-Scanner
+OSV_FILE="osv-scanner_${OSV_VERSION}_linux_${ARCH}"
+OSV_URL="https://github.com/google/osv-scanner/releases/download/v${OSV_VERSION}/osv-scanner_${OS}_${ARCH}"
+fetch_and_verify "$OSV_URL" "$PLUGIN_DIR/osv-scanner" "$OSV_FILE"
 chmod +x "$PLUGIN_DIR/osv-scanner"
 
-# 3. Trivy v0.51.0
-TRIVY_VER="0.51.0"
-curl -sSL "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VER}/trivy_${TRIVY_VER}_${OS}-${ARCH}.tar.gz" | tar -xz -C "$PLUGIN_DIR" trivy
+# 3. Trivy
+TRIVY_ARCH="64bit"
+if [ "$ARCH" = "arm64" ]; then
+    TRIVY_ARCH="ARM64"
+fi
+TRIVY_FILE="trivy_${TRIVY_VERSION}_Linux-${TRIVY_ARCH}.tar.gz"
+TRIVY_URL="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/${TRIVY_FILE}"
+fetch_and_verify "$TRIVY_URL" "$TMP_DIR/$TRIVY_FILE" "$TRIVY_FILE"
+tar -xzf "$TMP_DIR/$TRIVY_FILE" -C "$PLUGIN_DIR" trivy
+chmod +x "$PLUGIN_DIR/trivy"
 
-echo "✅ All scanner binaries successfully pinned."
+echo "🎉 All scanner binaries successfully installed and checksum-verified in $PLUGIN_DIR"

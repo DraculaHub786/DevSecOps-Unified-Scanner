@@ -1,4 +1,4 @@
-# Build stage
+# Multi-stage production build for Sentinel DevSecOps Unified Scanner
 FROM golang:1.24-alpine AS builder
 
 WORKDIR /src
@@ -6,22 +6,33 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /bin/sentinel ./cmd/sentinel
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /bin/sentinel-agent ./cmd/sentinel-agent
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /bin/sentinel ./cmd/sentinel && \
+    CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /bin/sentinel-agent ./cmd/sentinel-agent
 
 # Runtime stage
 FROM alpine:3.20
 
-RUN apk add --no-cache ca-certificates git curl
+RUN apk add --no-cache ca-certificates git curl bash jq
 
-# Install pinned scanner tools
-RUN curl -sSL https://github.com/gitleaks/gitleaks/releases/download/v8.18.4/gitleaks_8.18.4_linux_x64.tar.gz | tar -xz -C /usr/local/bin gitleaks \
-    && curl -sSL -o /usr/local/bin/osv-scanner https://github.com/google/osv-scanner/releases/download/v1.8.2/osv-scanner_linux_amd64 \
-    && chmod +x /usr/local/bin/osv-scanner
+# Install pinned external security engines
+ARG GITLEAKS_VER=8.18.4
+ARG OSV_VER=1.8.2
+ARG TRIVY_VER=0.51.0
+
+RUN curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VER}/gitleaks_${GITLEAKS_VER}_linux_x64.tar.gz" | tar -xz -C /usr/local/bin gitleaks && \
+    curl -fsSL -o /usr/local/bin/osv-scanner "https://github.com/google/osv-scanner/releases/download/v${OSV_VER}/osv-scanner_linux_amd64" && \
+    chmod +x /usr/local/bin/osv-scanner && \
+    curl -fsSL "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VER}/trivy_${TRIVY_VER}_Linux-64bit.tar.gz" | tar -xz -C /usr/local/bin trivy && \
+    chmod +x /usr/local/bin/trivy
 
 COPY --from=builder /bin/sentinel /usr/local/bin/sentinel
 COPY --from=builder /bin/sentinel-agent /usr/local/bin/sentinel-agent
-COPY rules/ /etc/sentinel/rules/
+
+# Create unprivileged security user
+RUN addgroup -g 10001 sentinel && \
+    adduser -u 10001 -G sentinel -D -s /bin/sh sentinel && \
+    mkdir -p /workspace /home/sentinel/.cache && \
+    chown -R sentinel:sentinel /workspace /home/sentinel
 
 WORKDIR /workspace
 USER 10001:10001

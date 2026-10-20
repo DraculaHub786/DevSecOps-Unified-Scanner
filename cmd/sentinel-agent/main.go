@@ -3,9 +3,12 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -13,29 +16,30 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sentinel-dev/sentinel/internal/adapters/gitleaks"
-	"github.com/sentinel-dev/sentinel/internal/adapters/nuclei"
-	"github.com/sentinel-dev/sentinel/internal/adapters/osv"
-	"github.com/sentinel-dev/sentinel/internal/adapters/resilience"
-	"github.com/sentinel-dev/sentinel/internal/adapters/semgrep"
-	"github.com/sentinel-dev/sentinel/internal/adapters/trivy"
-	"github.com/sentinel-dev/sentinel/internal/config"
-	"github.com/sentinel-dev/sentinel/internal/orchestrator"
+	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/adapters/gitleaks"
+	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/adapters/nuclei"
+	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/adapters/osv"
+	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/adapters/resilience"
+	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/adapters/semgrep"
+	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/adapters/trivy"
+	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/config"
+	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/orchestrator"
 )
 
-// JSON-RPC 2.0 structures
+// JSON-RPC 2.0 structures with authentication token
 type JSONRPCRequest struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      interface{}     `json:"id"`
+	Token   string          `json:"token"`
 	Method  string          `json:"method"`
 	Params  json.RawMessage `json:"params"`
 }
 
 type JSONRPCResponse struct {
-	JSONRPC string          `json:"jsonrpc"`
-	ID      interface{}     `json:"id"`
-	Result  interface{}     `json:"result,omitempty"`
-	Error   *JSONRPCError   `json:"error,omitempty"`
+	JSONRPC string        `json:"jsonrpc"`
+	ID      interface{}   `json:"id"`
+	Result  interface{}   `json:"result,omitempty"`
+	Error   *JSONRPCError `json:"error,omitempty"`
 }
 
 type JSONRPCError struct {
@@ -64,21 +68,45 @@ type FixParams struct {
 }
 
 type AgentServer struct {
-	mu          sync.RWMutex
-	scans       map[string]*orchestrator.ScanResult
-	scanStates  map[string]string // "running", "done", "error"
+	mu         sync.RWMutex
+	token      string
+	scans      map[string]*orchestrator.ScanResult
+	scanStates map[string]string // "running", "done", "error"
 }
 
-func newAgentServer() *AgentServer {
+func newAgentServer(token string) *AgentServer {
 	return &AgentServer{
+		token:      token,
 		scans:      make(map[string]*orchestrator.ScanResult),
 		scanStates: make(map[string]string),
 	}
 }
 
 func main() {
-	port := flag.Int("port", 48921, "TCP port for IDE agent IPC")
+	port := flag.Int("port", 48921, "TCP port for IDE agent IPC (binds strictly to 127.0.0.1)")
 	flag.Parse()
+
+	// 1. Generate cryptographic session token
+	tokenBytes := make([]byte, 24)
+	if _, err := rand.Read(tokenBytes); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to generate random agent token: %v\n", err)
+		os.Exit(1)
+	}
+	sessionToken := hex.EncodeToString(tokenBytes)
+
+	// 2. Persist token to user cache directory with restrictive mode 0600
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		cacheDir = os.TempDir()
+	}
+	tokenDir := filepath.Join(cacheDir, "sentinel")
+	_ = os.MkdirAll(tokenDir, 0700)
+	tokenFile := filepath.Join(tokenDir, "agent.token")
+	if err := os.WriteFile(tokenFile, []byte(sessionToken), 0600); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to write agent token file %s: %v\n", tokenFile, err)
+		os.Exit(1)
+	}
+	defer os.Remove(tokenFile)
 
 	addr := fmt.Sprintf("127.0.0.1:%d", *port)
 	listener, err := net.Listen("tcp", addr)
@@ -88,9 +116,10 @@ func main() {
 	}
 	defer listener.Close()
 
-	fmt.Printf("🚀 sentinel-agent IPC daemon listening on %s (JSON-RPC 2.0)\n", addr)
+	fmt.Printf("🚀 sentinel-agent IPC daemon active on %s (JSON-RPC 2.0 with session token auth)\n", addr)
+	fmt.Printf("🔑 Session token stored in: %s\n", tokenFile)
 
-	srv := newAgentServer()
+	srv := newAgentServer(sessionToken)
 
 	for {
 		conn, err := listener.Accept()
@@ -103,7 +132,9 @@ func main() {
 
 func (s *AgentServer) handleConnection(conn net.Conn) {
 	defer conn.Close()
-	scanner := bufio.NewScanner(conn)
+	// Impose 5MB request limit
+	limitedReader := io.LimitReader(conn, 5*1024*1024)
+	scanner := bufio.NewScanner(limitedReader)
 
 	for scanner.Scan() {
 		line := scanner.Bytes()
@@ -116,6 +147,18 @@ func (s *AgentServer) handleConnection(conn net.Conn) {
 			resp := JSONRPCResponse{
 				JSONRPC: "2.0",
 				Error:   &JSONRPCError{Code: -32700, Message: "Parse error"},
+			}
+			data, _ := json.Marshal(resp)
+			conn.Write(append(data, '\n'))
+			continue
+		}
+
+		// Enforce authentication token
+		if req.Token != s.token {
+			resp := JSONRPCResponse{
+				JSONRPC: "2.0",
+				ID:      req.ID,
+				Error:   &JSONRPCError{Code: -32001, Message: "Unauthorized: invalid or missing session token"},
 			}
 			data, _ := json.Marshal(resp)
 			conn.Write(append(data, '\n'))

@@ -1,4 +1,5 @@
 version: 1
+engine: "auto" # auto | external | embedded
 scanners:
   sast:
     enabled: true
@@ -16,7 +17,10 @@ scanners:
     enabled: true
   dast:
     enabled: false
-    target: "https://staging.myapp.com"
+    target: "" # e.g. "https://api.mycorp.internal"
+    allowlist:
+      - "api.mycorp.internal"
+    allow_private: false
   resilience:
     enabled: true
 
@@ -27,10 +31,12 @@ ignore:
     - "dist/**"
     - "build/**"
     - ".git/**"
-    - ".sentinel/**"
+    - "**/.sentinel/**"
     - "**/*_test.go"
   findings:
-    - "SENT-legacy-001" # Suppress false positive with justification
+    - id: "SENT-legacy-001"
+      reason: "Accepted legacy risk pending Q2 migration; tracked in SEC-402"
+      expires: "2027-01-31"
 
 thresholds:
   fail_on: "high"
@@ -44,4 +50,4 @@ output:
 
 cloud:
   enabled: false
-  endpoint: null
+  endpoint: ""

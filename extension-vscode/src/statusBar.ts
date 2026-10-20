@@ -16,17 +16,18 @@ export class SentinelStatusBar {
         this.item.tooltip = 'Sentinel scan currently in progress';
     }
 
-    public setResults(findings: Finding[]): void {
+    public setResults(findings: Finding[], mode: string = 'full'): void {
         const crit = findings.filter(f => f.severity.toLowerCase() === 'critical').length;
         const high = findings.filter(f => f.severity.toLowerCase() === 'high').length;
         const med = findings.filter(f => f.severity.toLowerCase() === 'medium').length;
+        const modeLabel = mode.toLowerCase() === 'lite' ? '[Lite]' : '[Full]';
 
         if (crit + high + med === 0) {
-            this.item.text = '$(shield) Sentinel: Clean';
-            this.item.tooltip = 'Sentinel DevSecOps: 0 critical or high findings';
+            this.item.text = `$(shield) Sentinel ${modeLabel}: Clean`;
+            this.item.tooltip = `Sentinel DevSecOps (${mode.toUpperCase()} Mode): 0 critical or high findings`;
         } else {
-            this.item.text = `$(shield) Sentinel: ${crit} 🚨 ${high} ⚠️`;
-            this.item.tooltip = `Sentinel Findings: ${crit} Critical, ${high} High, ${med} Medium. Click to re-scan.`;
+            this.item.text = `$(shield) Sentinel ${modeLabel}: ${crit} 🚨 ${high} ⚠️`;
+            this.item.tooltip = `Sentinel (${mode.toUpperCase()} Mode) Findings: ${crit} Critical, ${high} High, ${med} Medium. Click to re-scan.`;
         }
     }
 

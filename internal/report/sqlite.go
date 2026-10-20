@@ -2,13 +2,34 @@ package report
 
 import (
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
 
 	_ "modernc.org/sqlite"
-	"github.com/sentinel-dev/sentinel/internal/orchestrator"
+	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/orchestrator"
 )
+
+// ScanHistoryRecord represents a past scan entry stored in SQLite.
+type ScanHistoryRecord struct {
+	ID            int64     `json:"id"`
+	StartedAt     time.Time `json:"started_at"`
+	FinishedAt    time.Time `json:"finished_at"`
+	CommitSHA     string    `json:"commit_sha"`
+	TotalFindings int       `json:"total_findings"`
+	CriticalCount int       `json:"critical_count"`
+	HighCount     int       `json:"high_count"`
+}
+
+// DiffResult shows delta between two scan records.
+type DiffResult struct {
+	ScanA     int64                  `json:"scan_a"`
+	ScanB     int64                  `json:"scan_b"`
+	New       []orchestrator.Finding `json:"new"`
+	Fixed     []orchestrator.Finding `json:"fixed"`
+	Unchanged []orchestrator.Finding `json:"unchanged"`
+}
 
 // SQLiteStore saves scan records and findings for local historical tracking.
 type SQLiteStore struct {
@@ -24,7 +45,7 @@ func NewSQLiteStore(repoPath string) (*SQLiteStore, error) {
 	return &SQLiteStore{dbPath: dbPath}, nil
 }
 
-// RecordScan records the scan metadata and its findings into SQLite.
+// RecordScan records the scan metadata and its findings into SQLite with schema migrations.
 func (s *SQLiteStore) RecordScan(result *orchestrator.ScanResult, commitSHA string) error {
 	db, err := sql.Open("sqlite", s.dbPath)
 	if err != nil {
@@ -43,21 +64,27 @@ func (s *SQLiteStore) RecordScan(result *orchestrator.ScanResult, commitSHA stri
 	  high_count INTEGER
 	);
 	CREATE TABLE IF NOT EXISTS findings (
-	  id TEXT PRIMARY KEY,
 	  scan_id INTEGER,
+	  id TEXT,
 	  fingerprint TEXT,
+	  engine TEXT DEFAULT 'embedded',
 	  category TEXT,
 	  severity TEXT,
 	  file TEXT,
 	  line_start INTEGER,
 	  risk_score REAL,
-	  status TEXT,
+	  status TEXT DEFAULT 'open',
+	  PRIMARY KEY(scan_id, id),
 	  FOREIGN KEY(scan_id) REFERENCES scans(id)
 	);
 	`
 	if _, err := db.Exec(schema); err != nil {
 		return err
 	}
+
+	// Schema migration for old history.db tables
+	_, _ = db.Exec("ALTER TABLE findings ADD COLUMN engine TEXT DEFAULT 'embedded'")
+	_, _ = db.Exec("ALTER TABLE findings ADD COLUMN status TEXT DEFAULT 'open'")
 
 	tx, err := db.Begin()
 	if err != nil {
@@ -79,8 +106,8 @@ func (s *SQLiteStore) RecordScan(result *orchestrator.ScanResult, commitSHA stri
 	}
 
 	stmt, err := tx.Prepare(`
-		INSERT OR REPLACE INTO findings (id, scan_id, fingerprint, category, severity, file, line_start, risk_score, status)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open')
+		INSERT OR REPLACE INTO findings (id, scan_id, fingerprint, engine, category, severity, file, line_start, risk_score, status)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')
 	`)
 	if err != nil {
 		return err
@@ -88,10 +115,101 @@ func (s *SQLiteStore) RecordScan(result *orchestrator.ScanResult, commitSHA stri
 	defer stmt.Close()
 
 	for _, f := range result.Findings {
-		if _, err := stmt.Exec(f.ID, scanID, f.Fingerprint, f.Category, f.Severity, f.File, f.LineStart, f.RiskScore); err != nil {
+		eng := f.Engine
+		if eng == "" {
+			eng = orchestrator.EngineEmbedded
+		}
+		if _, err := stmt.Exec(f.ID, scanID, f.Fingerprint, eng, f.Category, f.Severity, f.File, f.LineStart, f.RiskScore); err != nil {
 			return err
 		}
 	}
 
 	return tx.Commit()
+}
+
+// ListScans returns recent historical scan summaries.
+func (s *SQLiteStore) ListScans() ([]ScanHistoryRecord, error) {
+	db, err := sql.Open("sqlite", s.dbPath)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+
+	rows, err := db.Query(`SELECT id, started_at, finished_at, commit_sha, total_findings, critical_count, high_count FROM scans ORDER BY id DESC LIMIT 25`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var records []ScanHistoryRecord
+	for rows.Next() {
+		var r ScanHistoryRecord
+		var startStr, finStr string
+		if err := rows.Scan(&r.ID, &startStr, &finStr, &r.CommitSHA, &r.TotalFindings, &r.CriticalCount, &r.HighCount); err != nil {
+			continue
+		}
+		r.StartedAt, _ = time.Parse(time.RFC3339, startStr)
+		r.FinishedAt, _ = time.Parse(time.RFC3339, finStr)
+		records = append(records, r)
+	}
+	return records, nil
+}
+
+// CompareScans compares findings from two historical scan IDs.
+func (s *SQLiteStore) CompareScans(scanA, scanB int64) (*DiffResult, error) {
+	db, err := sql.Open("sqlite", s.dbPath)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+
+	getFindings := func(scanID int64) (map[string]orchestrator.Finding, error) {
+		rows, err := db.Query(`SELECT id, fingerprint, engine, category, severity, file, line_start, risk_score FROM findings WHERE scan_id = ?`, scanID)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+
+		res := make(map[string]orchestrator.Finding)
+		for rows.Next() {
+			var f orchestrator.Finding
+			if err := rows.Scan(&f.ID, &f.Fingerprint, &f.Engine, &f.Category, &f.Severity, &f.File, &f.LineStart, &f.RiskScore); err == nil {
+				res[f.Fingerprint] = f
+			}
+		}
+		return res, nil
+	}
+
+	findingsA, err := getFindings(scanA)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch scan %d: %w", scanA, err)
+	}
+	findingsB, err := getFindings(scanB)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch scan %d: %w", scanB, err)
+	}
+
+	diff := &DiffResult{
+		ScanA:     scanA,
+		ScanB:     scanB,
+		New:       make([]orchestrator.Finding, 0),
+		Fixed:     make([]orchestrator.Finding, 0),
+		Unchanged: make([]orchestrator.Finding, 0),
+	}
+
+	for fp, fB := range findingsB {
+		if _, exists := findingsA[fp]; exists {
+			diff.Unchanged = append(diff.Unchanged, fB)
+		} else {
+			diff.New = append(diff.New, fB)
+		}
+	}
+
+	for fp, fA := range findingsA {
+		if _, exists := findingsB[fp]; !exists {
+			diff.Fixed = append(diff.Fixed, fA)
+		}
+	}
+
+	return diff, nil
 }

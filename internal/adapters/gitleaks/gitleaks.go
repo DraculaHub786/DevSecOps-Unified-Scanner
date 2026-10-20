@@ -13,8 +13,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sentinel-dev/sentinel/internal/config"
-	"github.com/sentinel-dev/sentinel/internal/orchestrator"
+	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/adapters"
+	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/config"
+	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/orchestrator"
 )
 
 // GitleaksAdapter wraps the Gitleaks CLI for secrets scanning, with an embedded
@@ -53,18 +54,20 @@ func (a *GitleaksAdapter) Run(ctx context.Context, repoPath string, cfg *config.
 	}
 
 	binPath, err := exec.LookPath("gitleaks")
-	if err == nil && binPath != "" {
-		return a.runCLI(ctx, binPath, repoPath, cfg)
+	if err != nil || binPath == "" {
+		if cfg.Engine == "external" {
+			return nil, fmt.Errorf("gitleaks executable not found in PATH and engine is configured as 'external'")
+		}
+		return a.runNativeFallback(repoPath, cfg)
 	}
 
-	// Native fallback engine
-	return a.runNativeFallback(repoPath, cfg)
+	return a.runCLI(ctx, binPath, repoPath, cfg)
 }
 
 func (a *GitleaksAdapter) runCLI(ctx context.Context, binPath, repoPath string, cfg *config.Config) ([]orchestrator.Finding, error) {
 	tmpReport, err := os.CreateTemp("", "sentinel-gitleaks-*.json")
 	if err != nil {
-		return a.runNativeFallback(repoPath, cfg)
+		return nil, fmt.Errorf("failed to create temp report file for gitleaks: %w", err)
 	}
 	tmpReportPath := tmpReport.Name()
 	tmpReport.Close()
@@ -75,6 +78,7 @@ func (a *GitleaksAdapter) runCLI(ctx context.Context, binPath, repoPath string, 
 		"--source", repoPath,
 		"--report-format", "json",
 		"--report-path", tmpReportPath,
+		"--redact",
 		"--exit-code", "0",
 	}
 
@@ -82,17 +86,33 @@ func (a *GitleaksAdapter) runCLI(ctx context.Context, binPath, repoPath string, 
 		args = append(args, "--no-git")
 	}
 
-	cmd := exec.CommandContext(ctx, binPath, args...)
-	_ = cmd.Run() // gitleaks returns code 1 if leaks found
+	toolRes, err := adapters.RunTool(ctx, binPath, args...)
+	if err != nil {
+		return nil, fmt.Errorf("gitleaks execution failed: %w", err)
+	}
+
+	if toolRes.ExitCode != 0 {
+		return nil, fmt.Errorf("gitleaks error (exit %d): %s", toolRes.ExitCode, strings.TrimSpace(string(toolRes.Stderr)))
+	}
 
 	data, err := os.ReadFile(tmpReportPath)
 	if err != nil || len(data) == 0 {
-		return a.runNativeFallback(repoPath, cfg)
+		// Clean exit with 0 findings is completely normal!
+		return []orchestrator.Finding{}, nil
+	}
+
+	return ParseReport(data, repoPath, cfg)
+}
+
+// ParseReport parses JSON output from Gitleaks and converts to normalized findings.
+func ParseReport(data []byte, repoPath string, cfg *config.Config) ([]orchestrator.Finding, error) {
+	if len(data) == 0 {
+		return []orchestrator.Finding{}, nil
 	}
 
 	var entries []gitleaksReportEntry
 	if err := json.Unmarshal(data, &entries); err != nil {
-		return a.runNativeFallback(repoPath, cfg)
+		return nil, fmt.Errorf("failed to parse gitleaks output report: %w", err)
 	}
 
 	findings := make([]orchestrator.Finding, 0, len(entries))
@@ -116,6 +136,7 @@ func (a *GitleaksAdapter) runCLI(ctx context.Context, binPath, repoPath string, 
 		f := orchestrator.Finding{
 			ID:          findingID,
 			Source:      "gitleaks",
+			Engine:      orchestrator.EngineExternal,
 			Category:    orchestrator.CategorySecret,
 			Rule:        entry.RuleID,
 			Severity:    orchestrator.SeverityCritical,
@@ -203,7 +224,6 @@ func (a *GitleaksAdapter) runNativeFallback(repoPath string, cfg *config.Config)
 			return nil
 		}
 
-		// Skip binary files and large files (> 2MB)
 		if info.Size() > 2*1024*1024 {
 			return nil
 		}
@@ -239,6 +259,7 @@ func (a *GitleaksAdapter) runNativeFallback(repoPath string, cfg *config.Config)
 					f := orchestrator.Finding{
 						ID:          findingID,
 						Source:      "gitleaks",
+						Engine:      orchestrator.EngineEmbedded,
 						Category:    orchestrator.CategorySecret,
 						Rule:        r.ID,
 						Severity:    orchestrator.SeverityCritical,

@@ -2,9 +2,10 @@ package report
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 
-	"github.com/sentinel-dev/sentinel/internal/orchestrator"
+	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/orchestrator"
 )
 
 // SARIF 2.1.0 JSON structures compatible with GitHub / GitLab Code Scanning.
@@ -49,10 +50,12 @@ type SARIFMessage struct {
 }
 
 type SARIFResult struct {
-	RuleID    string          `json:"ruleId"`
-	Level     string          `json:"level"`
-	Message   SARIFMessage    `json:"message"`
-	Locations []SARIFLocation `json:"locations,omitempty"`
+	RuleID              string            `json:"ruleId"`
+	Level               string            `json:"level"`
+	Message             SARIFMessage      `json:"message"`
+	PartialFingerprints map[string]string `json:"partialFingerprints,omitempty"`
+	Properties          map[string]string `json:"properties,omitempty"`
+	Locations           []SARIFLocation   `json:"locations,omitempty"`
 }
 
 type SARIFLocation struct {
@@ -121,6 +124,14 @@ func GenerateSARIF(findings []orchestrator.Finding) ([]byte, error) {
 			Message: SARIFMessage{
 				Text: f.Message,
 			},
+			PartialFingerprints: map[string]string{
+				"primaryLocationLineHash": f.Fingerprint,
+			},
+			Properties: map[string]string{
+				"engine":    f.Engine,
+				"riskScore": fmt.Sprintf("%.1f", f.RiskScore),
+				"category":  f.Category,
+			},
 			Locations: []SARIFLocation{
 				{
 					PhysicalLocation: SARIFPhysicalLocation{
@@ -154,7 +165,7 @@ func GenerateSARIF(findings []orchestrator.Finding) ([]byte, error) {
 					Driver: SARIFDriver{
 						Name:           "Sentinel",
 						Version:        "1.0.0",
-						InformationURI: "https://github.com/sentinel-dev/sentinel",
+						InformationURI: "https://github.com/DraculaHub786/DevSecOps-Unified-Scanner",
 						Rules:          rules,
 					},
 				},

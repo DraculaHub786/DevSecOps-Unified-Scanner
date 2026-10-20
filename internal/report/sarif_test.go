@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sentinel-dev/sentinel/internal/orchestrator"
+	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/orchestrator"
 )
 
 func TestGenerateSARIF(t *testing.T) {

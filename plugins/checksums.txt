@@ -1,0 +1,16 @@
+# SHA256 checksums for pinned scanner binaries
+# Format: <hash>  <filename>
+# Gitleaks 8.18.4
+11488c03975ba6ff6414902a281bbcfbe93dfaa0cfc34da83921b79f8fa55341  gitleaks_8.18.4_linux_x64.tar.gz
+474bc93a903e1e550e59aee00b868f18b3dfb7681283ea0e62a95c9ec64a5009  gitleaks_8.18.4_linux_arm64.tar.gz
+8eec7bf073fa1380eaec50bb3eec3b64dc2ae5cb3f79a9f4c3983226a26dfbf0  gitleaks_8.18.4_windows_x64.zip
+
+# OSV-Scanner 1.8.2
+6e8284534e84377ff26b779a557a26f866ae701e6a17b075e7a9e527d721a92e  osv-scanner_1.8.2_linux_amd64
+4ca53eb05e326622ec1fe8f35dd9a797cff39a8c067e5a8d46777174db4c19a4  osv-scanner_1.8.2_linux_arm64
+2605658e3ce682662c828ca3aee1fe71b9c8d37443818e6c7104b9015c7f8a9e  osv-scanner_1.8.2_windows_amd64.exe
+
+# Trivy 0.51.0
+42c2be9dbbb1b2e88a38c29b6a935be0c992795f24255767b45053ebfe22588c  trivy_0.51.0_Linux-64bit.tar.gz
+b1d3d6232d3fec442feea1f66d21f83c07fc7cb5cf55d64ffc93541a5f6e6129  trivy_0.51.0_Linux-ARM64.tar.gz
+9f518e154f85e3cb7be8353381fa8b89f53d2bf3e80816cf631cbe9426f076eb  trivy_0.51.0_windows-64bit.zip
