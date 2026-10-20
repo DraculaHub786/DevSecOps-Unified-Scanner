@@ -1,9 +1,9 @@
 # SHA256 checksums for pinned scanner binaries
 # Format: <hash>  <filename>
 # Gitleaks 8.18.4
-11488c03975ba6ff6414902a281bbcfbe93dfaa0cfc34da83921b79f8fa55341  gitleaks_8.18.4_linux_x64.tar.gz
-474bc93a903e1e550e59aee00b868f18b3dfb7681283ea0e62a95c9ec64a5009  gitleaks_8.18.4_linux_arm64.tar.gz
-8eec7bf073fa1380eaec50bb3eec3b64dc2ae5cb3f79a9f4c3983226a26dfbf0  gitleaks_8.18.4_windows_x64.zip
+ba6dbb656933921c775ee5a2d1c13a91046e7952e9d919f9bac4cec61d628e7d  gitleaks_8.18.4_linux_x64.tar.gz
+bf5f7f466ebfade1296c8bd32cf7d3f592c2aa78836aa9980ffbe2cadca7a861  gitleaks_8.18.4_linux_arm64.tar.gz
+9ba442ca7dda19885a2e569f43a127289feeb2b5fb0dfa251dafd277f4a0ba91  gitleaks_8.18.4_windows_x64.zip
 
 # OSV-Scanner 1.8.2
 6e8284534e84377ff26b779a557a26f866ae701e6a17b075e7a9e527d721a92e  osv-scanner_1.8.2_linux_amd64
