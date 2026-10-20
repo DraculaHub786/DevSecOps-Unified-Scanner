@@ -224,14 +224,25 @@ func runScanInternal(
 	}
 
 	// Gating check for CI mode exit code
-	failRank := orchestrator.SeverityRank(cfg.Thresholds.FailOn)
-	for _, f := range result.Findings {
-		if orchestrator.SeverityRank(f.Severity) >= failRank {
-			os.Exit(1)
-		}
+	if shouldFailForFindings(ciMode, result.Findings, cfg.Thresholds.FailOn) {
+		os.Exit(1)
 	}
 
 	os.Exit(0)
+}
+
+func shouldFailForFindings(ciMode bool, findings []orchestrator.Finding, failOn string) bool {
+	if !ciMode {
+		return false
+	}
+
+	failRank := orchestrator.SeverityRank(failOn)
+	for _, f := range findings {
+		if orchestrator.SeverityRank(f.Severity) >= failRank {
+			return true
+		}
+	}
+	return false
 }
 
 func detectGitChangedFiles(repoPath string) []string {
