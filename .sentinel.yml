@@ -1,0 +1,48 @@
+version: 1
+scanners:
+  sast:
+    enabled: true
+    ruleset: "auto"
+    extra_rules:
+      - "rules/sast-rules.yml"
+  secrets:
+    enabled: true
+    scan_history: false
+  sca:
+    enabled: true
+    fail_on_license:
+      - "GPL-3.0"
+  iac:
+    enabled: true
+  dast:
+    enabled: false
+    target: ""
+  resilience:
+    enabled: true
+
+ignore:
+  paths:
+    - "vendor/**"
+    - "node_modules/**"
+    - "dist/**"
+    - "build/**"
+    - ".git/**"
+    - ".sentinel/**"
+    - "testdata/**"
+    - "**/*_test.go"
+  findings:
+    - "SENT-b64f59dc55e7" # Scanner regex pattern string in semgrep.go fallback engine
+
+thresholds:
+  fail_on: "high"
+
+output:
+  formats:
+    - "terminal"
+    - "sarif"
+    - "markdown"
+  path: ".sentinel/reports/"
+
+cloud:
+  enabled: false
+  endpoint: null

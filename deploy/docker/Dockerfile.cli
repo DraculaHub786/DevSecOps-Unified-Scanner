@@ -1,0 +1,30 @@
+# Build stage
+FROM golang:1.24-alpine AS builder
+
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /bin/sentinel ./cmd/sentinel
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /bin/sentinel-agent ./cmd/sentinel-agent
+
+# Runtime stage
+FROM alpine:3.20
+
+RUN apk add --no-cache ca-certificates git curl
+
+# Install pinned scanner tools
+RUN curl -sSL https://github.com/gitleaks/gitleaks/releases/download/v8.18.4/gitleaks_8.18.4_linux_x64.tar.gz | tar -xz -C /usr/local/bin gitleaks \
+    && curl -sSL -o /usr/local/bin/osv-scanner https://github.com/google/osv-scanner/releases/download/v1.8.2/osv-scanner_linux_amd64 \
+    && chmod +x /usr/local/bin/osv-scanner
+
+COPY --from=builder /bin/sentinel /usr/local/bin/sentinel
+COPY --from=builder /bin/sentinel-agent /usr/local/bin/sentinel-agent
+COPY rules/ /etc/sentinel/rules/
+
+WORKDIR /workspace
+USER 10001:10001
+
+ENTRYPOINT ["/usr/local/bin/sentinel"]
+CMD ["scan"]

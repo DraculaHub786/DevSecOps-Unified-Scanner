@@ -1,0 +1,11 @@
+{
+  "name": "vulnerable-app",
+  "version": "1.0.0",
+  "description": "Intentionally vulnerable sample app for Sentinel integration verification",
+  "main": "server.js",
+  "dependencies": {
+    "axios": "0.21.1",
+    "express": "4.17.1",
+    "lodash": "4.17.15"
+  }
+}

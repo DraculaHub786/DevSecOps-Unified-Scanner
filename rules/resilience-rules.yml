@@ -1,0 +1,18 @@
+rules:
+  - id: org-http-server-timeouts
+    patterns:
+      - pattern: http.ListenAndServe(...)
+    message: Production HTTP servers must specify explicit ReadTimeout, ReadHeaderTimeout, and WriteTimeout.
+    severity: WARNING
+    languages: [go]
+    metadata:
+      cwe: "CWE-400"
+
+  - id: org-bounded-request-body
+    patterns:
+      - pattern: io.ReadAll(r.Body)
+    message: Always wrap r.Body with http.MaxBytesReader to guard against memory exhaustion denial of service.
+    severity: ERROR
+    languages: [go]
+    metadata:
+      cwe: "CWE-400"

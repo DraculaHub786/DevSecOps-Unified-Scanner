@@ -1,0 +1,29 @@
+rules:
+  - id: org-no-hardcoded-credentials
+    patterns:
+      - pattern-either:
+          - pattern: $KEY = "AKIA..."
+          - pattern: $TOKEN = "ghp_..."
+    message: Hardcoded credentials or secrets violate organizational security policy. Use environment variables.
+    severity: ERROR
+    languages: [go, javascript, typescript, python]
+    metadata:
+      cwe: "CWE-798"
+
+  - id: org-parameterized-queries-only
+    patterns:
+      - pattern: db.Query(fmt.Sprintf(...))
+    message: SQL queries must use parameterized placeholders instead of string formatting to prevent SQL injection.
+    severity: ERROR
+    languages: [go]
+    metadata:
+      cwe: "CWE-89"
+
+  - id: org-enforce-tls-verification
+    patterns:
+      - pattern: InsecureSkipVerify: true
+    message: InsecureSkipVerify disables TLS certificate authentication and enables Man-in-the-Middle (MitM) attacks.
+    severity: ERROR
+    languages: [go]
+    metadata:
+      cwe: "CWE-295"

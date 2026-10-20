@@ -1,0 +1,91 @@
+{
+  "name": "sentinel-vscode",
+  "displayName": "Sentinel DevSecOps Unified Scanner",
+  "description": "Unified SAST, SCA, secrets, IaC, and resilience scanner with inline diagnostics and auto-remediation.",
+  "version": "1.0.0",
+  "publisher": "sentinel-dev",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Linters",
+    "Programming Languages",
+    "Security"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "sentinel.scanWorkspace",
+        "title": "Sentinel: Scan Workspace",
+        "category": "Sentinel"
+      },
+      {
+        "command": "sentinel.scanFile",
+        "title": "Sentinel: Scan Current File",
+        "category": "Sentinel"
+      },
+      {
+        "command": "sentinel.showFindingDetails",
+        "title": "Sentinel: Explain Finding",
+        "category": "Sentinel"
+      },
+      {
+        "command": "sentinel.applyFix",
+        "title": "Sentinel: Apply Suggested Fix",
+        "category": "Sentinel"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "sentinel-sidebar",
+          "title": "Sentinel Security",
+          "icon": "media/shield.svg"
+        }
+      ]
+    },
+    "views": {
+      "sentinel-sidebar": [
+        {
+          "id": "sentinel.findings",
+          "name": "Security Findings"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Sentinel",
+      "properties": {
+        "sentinel.scanOnSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically scan modified files on save (incremental)."
+        },
+        "sentinel.agentPort": {
+          "type": "number",
+          "default": 48921,
+          "description": "TCP port of the local sentinel-agent IPC service."
+        },
+        "sentinel.cloudSync": {
+          "type": "boolean",
+          "default": false,
+          "description": "Sync findings metadata to Sentinel Cloud backend (disabled by default)."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "compile": "tsc -p ./",
+    "build": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.80.0",
+    "typescript": "^5.3.3"
+  }
+}
