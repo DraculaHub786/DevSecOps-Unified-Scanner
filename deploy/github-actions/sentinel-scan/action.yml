@@ -1,64 +1,25 @@
 name: 'Sentinel DevSecOps Scanner'
-description: 'Unified SAST, SCA, secrets, IaC, and resilience scanner with SARIF code scanning output and PR gating'
+description: 'Unified SAST, SCA, secrets, IaC and resilience scan that writes SARIF'
 author: 'DraculaHub786'
 inputs:
   fail-on:
-    description: 'Fail build if findings meet or exceed severity threshold (critical, high, medium, low)'
+    description: 'Fail at or above this severity (critical, high, medium, low)'
     required: false
     default: 'high'
-  format:
-    description: 'Report formats to generate (terminal, sarif, json, markdown, html)'
-    required: false
-    default: 'terminal,sarif,markdown'
-  sarif-file:
-    description: 'Path to write SARIF output'
-    required: false
-    default: 'results.sarif'
-  target:
-    description: 'Path or repository directory to scan'
+  path:
+    description: 'Directory to scan'
     required: false
     default: '.'
-  allow-lite:
-    description: 'Allow embedded fallback engines to run in CI mode without exit 2 failure'
-    required: false
-    default: 'false'
-
 runs:
-  using: 'composite'
-  steps:
-    - name: Set up Go
-      uses: actions/setup-go@v5
-      with:
-        go-version: '>=1.24'
-
-    - name: Install Sentinel CLI
-      shell: bash
-      run: |
-        go install github.com/DraculaHub786/DevSecOps-Unified-Scanner/cmd/sentinel@latest || \
-        go build -o /usr/local/bin/sentinel ./cmd/sentinel
-
-    - name: Run Sentinel Security Scan
-      shell: bash
-      env:
-        INPUT_TARGET: ${{ inputs.target }}
-        INPUT_FAIL_ON: ${{ inputs.fail-on }}
-        INPUT_FORMAT: ${{ inputs.format }}
-        INPUT_SARIF_FILE: ${{ inputs.sarif-file }}
-        INPUT_ALLOW_LITE: ${{ inputs.allow-lite }}
-      run: |
-        LITE_FLAG=""
-        if [ "$INPUT_ALLOW_LITE" = "true" ]; then
-          LITE_FLAG="--allow-lite"
-        fi
-        sentinel scan "$INPUT_TARGET" \
-          --ci \
-          $LITE_FLAG \
-          --fail-on="$INPUT_FAIL_ON" \
-          --format="$INPUT_FORMAT" \
-          --out="$INPUT_SARIF_FILE"
-
-    - name: Upload SARIF report to GitHub Code Scanning
-      if: always()
-      uses: github/codeql-action/upload-sarif@v3
-      with:
-        sarif_file: ${{ inputs.sarif-file }}
+  using: 'docker'
+  image: 'docker://ghcr.io/draculahub786/devsecops-unified-scanner:v0.1.0'
+  args:
+    - 'scan'
+    - ${{ inputs.path }}
+    - '--ci'
+    - '--fail-on'
+    - ${{ inputs.fail-on }}
+    - '--format'
+    - 'sarif'
+    - '--out'
+    - 'results.sarif'

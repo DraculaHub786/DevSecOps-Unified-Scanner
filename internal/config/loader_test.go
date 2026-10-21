@@ -138,3 +138,36 @@ ignore:
 		t.Errorf("Expected justification reason error, got: %v", err)
 	}
 }
+
+func TestConfigLoadInvalidThresholds(t *testing.T) {
+	// Test invalid fail_on
+	tmpDir1 := t.TempDir()
+	yaml1 := `
+version: 1
+thresholds:
+  fail_on: "ultra-critical"
+`
+	if err := os.WriteFile(filepath.Join(tmpDir1, ".sentinel.yml"), []byte(yaml1), 0644); err != nil {
+		t.Fatalf("Failed to write .sentinel.yml: %v", err)
+	}
+	_, err := Load(tmpDir1)
+	if err == nil || !strings.Contains(err.Error(), "invalid thresholds.fail_on") {
+		t.Errorf("Expected error for invalid fail_on threshold, got: %v", err)
+	}
+
+	// Test invalid risk_score_max
+	tmpDir2 := t.TempDir()
+	yaml2 := `
+version: 1
+thresholds:
+  risk_score_max: 150.0
+`
+	if err := os.WriteFile(filepath.Join(tmpDir2, ".sentinel.yml"), []byte(yaml2), 0644); err != nil {
+		t.Fatalf("Failed to write .sentinel.yml: %v", err)
+	}
+	_, err = Load(tmpDir2)
+	if err == nil || !strings.Contains(err.Error(), "invalid thresholds.risk_score_max") {
+		t.Errorf("Expected error for out-of-range risk_score_max, got: %v", err)
+	}
+}
+

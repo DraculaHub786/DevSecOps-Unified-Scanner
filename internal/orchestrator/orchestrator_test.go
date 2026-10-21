@@ -77,3 +77,37 @@ func TestCalculateRiskScore(t *testing.T) {
 		t.Errorf("risk score must be clamped at 100.0, got %.1f", score)
 	}
 }
+
+func TestDiscoveryMultiLanguageAndFixtureScan(t *testing.T) {
+	fixturePath := "../../testdata/vulnerable-app"
+	discovery, err := Discover(fixturePath)
+	if err != nil {
+		t.Fatalf("Discover failed on vulnerable fixture: %v", err)
+	}
+
+	langs := make(map[string]bool)
+	for _, l := range discovery.Languages {
+		langs[l] = true
+	}
+	for _, requiredLang := range []string{"go", "javascript", "python", "terraform"} {
+		if !langs[requiredLang] {
+			t.Errorf("Expected language %q in discovery results, got: %v", requiredLang, discovery.Languages)
+		}
+	}
+
+	manifests := make(map[string]bool)
+	for _, m := range discovery.Manifests {
+		manifests[m] = true
+	}
+	if !manifests["package.json"] {
+		t.Errorf("Expected package.json in discovery manifests, got: %v", discovery.Manifests)
+	}
+	if !manifests["requirements.txt"] {
+		t.Errorf("Expected requirements.txt in discovery manifests, got: %v", discovery.Manifests)
+	}
+
+	if len(discovery.IaCFiles) < 2 {
+		t.Errorf("Expected at least 2 IaC files (Dockerfile, infra.tf), got: %v", discovery.IaCFiles)
+	}
+}
+

@@ -58,6 +58,7 @@ type Finding struct {
 	Reachable     *bool     `json:"reachable,omitempty"`
 	Exposed       *bool     `json:"exposed,omitempty"`
 	RiskScore     float64   `json:"risk_score"`
+	License       string    `json:"license,omitempty"`
 	FixSuggestion *Fix      `json:"fix_suggestion,omitempty"`
 	FirstSeen     time.Time `json:"first_seen"`
 	Fingerprint   string    `json:"fingerprint"`

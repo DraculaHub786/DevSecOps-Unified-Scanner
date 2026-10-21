@@ -52,6 +52,8 @@ type osvScanOutput struct {
 				Version   string `json:"version"`
 				Ecosystem string `json:"ecosystem"`
 			} `json:"package"`
+			License  string   `json:"license,omitempty"`
+			Licenses []string `json:"licenses,omitempty"`
 			Vulnerabilities []struct {
 				ID      string   `json:"id"`
 				Summary string   `json:"summary"`
@@ -121,6 +123,35 @@ func (a *OSVAdapter) ParseOutput(data []byte, repoPath string, cfg *config.Confi
 		}
 
 		for _, pkg := range res.Packages {
+			pkgLicense := pkg.License
+			if pkgLicense == "" && len(pkg.Licenses) > 0 {
+				pkgLicense = strings.Join(pkg.Licenses, ", ")
+			}
+
+			// Check license compliance against fail_on_license
+			if isDisallowedLicense(pkgLicense, cfg.Scanners.SCA.FailOnLicense) {
+				licID := orchestrator.GenerateID("license", pkgLicense, relFile, 1)
+				if !cfg.ShouldIgnoreFinding(licID) {
+					lf := orchestrator.Finding{
+						ID:          licID,
+						Source:      "osv",
+						Engine:      orchestrator.EngineExternal,
+						Category:    orchestrator.CategorySCA,
+						Rule:        "license/" + pkgLicense,
+						Severity:    orchestrator.SeverityHigh,
+						License:     pkgLicense,
+						File:        relFile,
+						LineStart:   1,
+						LineEnd:     1,
+						Message:     fmt.Sprintf("Dependency %s uses forbidden license %q (configured in scanners.sca.fail_on_license)", pkg.Package.Name, pkgLicense),
+						FirstSeen:   time.Now().UTC(),
+						Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategorySCA, "license", relFile, pkg.Package.Name),
+					}
+					lf.RiskScore = orchestrator.CalculateRiskScore(&lf)
+					findings = append(findings, lf)
+				}
+			}
+
 			for _, vuln := range pkg.Vulnerabilities {
 				cve := vuln.ID
 				for _, alias := range vuln.Aliases {
@@ -157,6 +188,7 @@ func (a *OSVAdapter) ParseOutput(data []byte, repoPath string, cfg *config.Confi
 					Severity:    sev,
 					CVE:         cve,
 					CVSS:        cvss,
+					License:     pkgLicense,
 					File:        relFile,
 					LineStart:   1,
 					LineEnd:     1,
@@ -183,7 +215,22 @@ type knownVuln struct {
 	CVE         string
 	Severity    string
 	CVSS        float64
+	License     string
 	Description string
+}
+
+func isDisallowedLicense(lic string, disallowed []string) bool {
+	if lic == "" || len(disallowed) == 0 {
+		return false
+	}
+	licLower := strings.ToLower(strings.TrimSpace(lic))
+	for _, d := range disallowed {
+		dLower := strings.ToLower(strings.TrimSpace(d))
+		if dLower != "" && (licLower == dLower || strings.Contains(licLower, dLower)) {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *OSVAdapter) runNativeFallback(repoPath string, cfg *config.Config, discovery *orchestrator.DiscoveryResult) ([]orchestrator.Finding, error) {
@@ -196,6 +243,7 @@ func (a *OSVAdapter) runNativeFallback(repoPath string, cfg *config.Config, disc
 			CVE:         "CVE-2021-23337",
 			Severity:    orchestrator.SeverityHigh,
 			CVSS:        7.2,
+			License:     "MIT",
 			Description: "Command Injection via template in lodash",
 		},
 		{
@@ -206,6 +254,7 @@ func (a *OSVAdapter) runNativeFallback(repoPath string, cfg *config.Config, disc
 			CVE:         "CVE-2020-28168",
 			Severity:    orchestrator.SeverityMedium,
 			CVSS:        5.9,
+			License:     "MIT",
 			Description: "Server-Side Request Forgery (SSRF) bypass in axios",
 		},
 		{
@@ -216,6 +265,7 @@ func (a *OSVAdapter) runNativeFallback(repoPath string, cfg *config.Config, disc
 			CVE:         "CVE-2024-29041",
 			Severity:    orchestrator.SeverityMedium,
 			CVSS:        6.5,
+			License:     "MIT",
 			Description: "Open redirect vulnerability in express router",
 		},
 		{
@@ -226,6 +276,7 @@ func (a *OSVAdapter) runNativeFallback(repoPath string, cfg *config.Config, disc
 			CVE:         "CVE-2023-32681",
 			Severity:    orchestrator.SeverityMedium,
 			CVSS:        6.1,
+			License:     "Apache-2.0",
 			Description: "Unintended leak of Proxy-Authorization headers in requests",
 		},
 		{
@@ -236,6 +287,7 @@ func (a *OSVAdapter) runNativeFallback(repoPath string, cfg *config.Config, disc
 			CVE:         "CVE-2024-37891",
 			Severity:    orchestrator.SeverityHigh,
 			CVSS:        7.5,
+			License:     "MIT",
 			Description: "Proxy-Authorization header leak on cross-origin redirects in urllib3",
 		},
 		{
@@ -246,6 +298,7 @@ func (a *OSVAdapter) runNativeFallback(repoPath string, cfg *config.Config, disc
 			CVE:         "CVE-2020-29652",
 			Severity:    orchestrator.SeverityHigh,
 			CVSS:        7.5,
+			License:     "BSD-3-Clause",
 			Description: "Panic in SSH server when receiving malformed packet in golang.org/x/crypto",
 		},
 	}
@@ -275,6 +328,31 @@ func (a *OSVAdapter) runNativeFallback(repoPath string, cfg *config.Config, disc
 				for idx, line := range lines {
 					if match := re.FindStringSubmatch(line); len(match) > 1 {
 						ver := match[1]
+
+						// Check license policy
+						if isDisallowedLicense(dbEntry.License, cfg.Scanners.SCA.FailOnLicense) {
+							licID := orchestrator.GenerateID("license", dbEntry.License, manifest, idx+1)
+							if !cfg.ShouldIgnoreFinding(licID) {
+								lf := orchestrator.Finding{
+									ID:          licID,
+									Source:      "osv",
+									Engine:      orchestrator.EngineEmbedded,
+									Category:    orchestrator.CategorySCA,
+									Rule:        "license/" + dbEntry.License,
+									Severity:    orchestrator.SeverityHigh,
+									License:     dbEntry.License,
+									File:        manifest,
+									LineStart:   idx + 1,
+									LineEnd:     idx + 1,
+									Message:     fmt.Sprintf("Dependency %s uses forbidden license %q (configured in scanners.sca.fail_on_license)", dbEntry.Package, dbEntry.License),
+									FirstSeen:   time.Now().UTC(),
+									Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategorySCA, "license", manifest, dbEntry.Package),
+								}
+								lf.RiskScore = orchestrator.CalculateRiskScore(&lf)
+								findings = append(findings, lf)
+							}
+						}
+
 						checkRe := regexp.MustCompile(dbEntry.Vulnerable)
 						if checkRe.MatchString(ver) {
 							reachable := a.checkReachability(dbEntry.Package, repoPath)
@@ -291,6 +369,7 @@ func (a *OSVAdapter) runNativeFallback(repoPath string, cfg *config.Config, disc
 								Severity:    dbEntry.Severity,
 								CVE:         dbEntry.CVE,
 								CVSS:        dbEntry.CVSS,
+								License:     dbEntry.License,
 								File:        manifest,
 								LineStart:   idx + 1,
 								LineEnd:     idx + 1,
@@ -314,6 +393,31 @@ func (a *OSVAdapter) runNativeFallback(repoPath string, cfg *config.Config, disc
 				for idx, line := range lines {
 					if match := re.FindStringSubmatch(line); len(match) > 1 {
 						ver := match[1]
+
+						// Check license policy
+						if isDisallowedLicense(dbEntry.License, cfg.Scanners.SCA.FailOnLicense) {
+							licID := orchestrator.GenerateID("license", dbEntry.License, manifest, idx+1)
+							if !cfg.ShouldIgnoreFinding(licID) {
+								lf := orchestrator.Finding{
+									ID:          licID,
+									Source:      "osv",
+									Engine:      orchestrator.EngineEmbedded,
+									Category:    orchestrator.CategorySCA,
+									Rule:        "license/" + dbEntry.License,
+									Severity:    orchestrator.SeverityHigh,
+									License:     dbEntry.License,
+									File:        manifest,
+									LineStart:   idx + 1,
+									LineEnd:     idx + 1,
+									Message:     fmt.Sprintf("Dependency %s uses forbidden license %q (configured in scanners.sca.fail_on_license)", dbEntry.Package, dbEntry.License),
+									FirstSeen:   time.Now().UTC(),
+									Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategorySCA, "license", manifest, dbEntry.Package),
+								}
+								lf.RiskScore = orchestrator.CalculateRiskScore(&lf)
+								findings = append(findings, lf)
+							}
+						}
+
 						checkRe := regexp.MustCompile(dbEntry.Vulnerable)
 						if checkRe.MatchString(ver) {
 							reachable := a.checkReachability(dbEntry.Package, repoPath)
@@ -330,6 +434,7 @@ func (a *OSVAdapter) runNativeFallback(repoPath string, cfg *config.Config, disc
 								Severity:    dbEntry.Severity,
 								CVE:         dbEntry.CVE,
 								CVSS:        dbEntry.CVSS,
+								License:     dbEntry.License,
 								File:        manifest,
 								LineStart:   idx + 1,
 								LineEnd:     idx + 1,

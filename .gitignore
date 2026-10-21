@@ -14,6 +14,14 @@ build/
 *.test
 *.out
 
+# Downloaded scanner engine binaries
+plugins/gitleaks*
+plugins/osv-scanner*
+plugins/trivy*
+plugins/nuclei*
+plugins/semgrep*
+
+
 # Node dependencies & artifacts
 node_modules/
 */node_modules/

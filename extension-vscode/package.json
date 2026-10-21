@@ -3,7 +3,12 @@
   "displayName": "Sentinel DevSecOps Unified Scanner",
   "description": "Unified SAST, SCA, secrets, IaC, and resilience scanner with inline diagnostics and auto-remediation.",
   "version": "1.0.0",
-  "publisher": "sentinel-dev",
+  "publisher": "draculahub786",
+  "icon": "media/shield.svg",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/DraculaHub786/DevSecOps-Unified-Scanner"
+  },
   "engines": {
     "vscode": "^1.80.0"
   },

@@ -56,6 +56,23 @@ func Load(repoPath string) (*Config, error) {
 		}
 	}
 
+	// Validation: threshold levels
+	if cfg.Thresholds.FailOn != "" {
+		validLevels := map[string]bool{
+			"critical": true,
+			"high":     true,
+			"medium":   true,
+			"low":      true,
+			"info":     true,
+		}
+		if !validLevels[strings.ToLower(cfg.Thresholds.FailOn)] {
+			return nil, fmt.Errorf("invalid thresholds.fail_on %q: must be one of critical, high, medium, low, info", cfg.Thresholds.FailOn)
+		}
+	}
+	if cfg.Thresholds.RiskScoreMax < 0 || cfg.Thresholds.RiskScoreMax > 100 {
+		return nil, fmt.Errorf("invalid thresholds.risk_score_max %.1f: must be between 0.0 and 100.0", cfg.Thresholds.RiskScoreMax)
+	}
+
 	return cfg, nil
 }
 
