@@ -12,7 +12,7 @@ inputs:
     default: '.'
 runs:
   using: 'docker'
-  image: 'docker://ghcr.io/draculahub786/devsecops-unified-scanner:v0.1.0'
+  image: 'docker://ghcr.io/draculahub786/devsecops-unified-scanner:v0.1.1'
   args:
     - 'scan'
     - ${{ inputs.path }}
