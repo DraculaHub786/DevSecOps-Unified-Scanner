@@ -124,11 +124,6 @@ func runScanInternal(
 			os.Exit(2)
 		}
 		cfg = loaded
-		if auditWarnings := config.Audit(cfg); len(auditWarnings) > 0 {
-			for _, w := range auditWarnings {
-				fmt.Fprintf(os.Stderr, "⚠️ Policy Audit: %s\n", w)
-			}
-		}
 	} else {
 		loaded, err := config.Load(absRepo)
 		if err != nil {
@@ -136,6 +131,12 @@ func runScanInternal(
 			loaded = config.DefaultConfig()
 		}
 		cfg = loaded
+	}
+
+	if auditWarnings := config.Audit(cfg); len(auditWarnings) > 0 {
+		for _, w := range auditWarnings {
+			fmt.Fprintf(os.Stderr, "⚠️ Policy Audit: %s\n", w)
+		}
 	}
 
 	if offline {

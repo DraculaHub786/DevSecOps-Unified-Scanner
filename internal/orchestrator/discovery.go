@@ -155,7 +155,8 @@ func Discover(repoPath string) (*DiscoveryResult, error) {
 		}
 
 		// Check for entry point routes in source files or Dockerfiles
-		if ext == ".go" || ext == ".js" || ext == ".ts" || ext == ".py" || strings.Contains(baseName, "dockerfile") {
+		isEligible := (ext == ".go" || ext == ".js" || ext == ".ts" || ext == ".py" || strings.Contains(baseName, "dockerfile"))
+		if isEligible && !strings.HasSuffix(baseName, "_test.go") && info.Size() <= 1024*1024 {
 			data, err := os.ReadFile(path)
 			if err == nil {
 				content := string(data)

@@ -2,6 +2,8 @@ package orchestrator
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -113,6 +115,55 @@ func TestDiscoveryMultiLanguageAndFixtureScan(t *testing.T) {
 
 	if len(discovery.IaCFiles) < 2 {
 		t.Errorf("Expected at least 2 IaC files (Dockerfile, infra.tf), got: %v", discovery.IaCFiles)
+	}
+}
+
+func TestDiscoveryEntryPointExclusions(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// 1. Normal Go file with route -> should be detected
+	mainGo := filepath.Join(tmpDir, "main.go")
+	_ = os.WriteFile(mainGo, []byte("package main\nfunc main() { http.HandleFunc(\"/api\", nil) }"), 0644)
+
+	// 2. _test.go with route -> should be SKIPPED
+	testGo := filepath.Join(tmpDir, "server_test.go")
+	_ = os.WriteFile(testGo, []byte("package main\nfunc TestServer(t *testing.T) { http.HandleFunc(\"/test\", nil) }"), 0644)
+
+	// 3. File > 1 MiB -> should be SKIPPED
+	largeGo := filepath.Join(tmpDir, "large.go")
+	f, err := os.Create(largeGo)
+	if err != nil {
+		t.Fatalf("failed to create large file: %v", err)
+	}
+	_ = f.Truncate(1024*1024 + 10) // 1 MiB + 10 bytes
+	_, _ = f.WriteAt([]byte("http.HandleFunc(\"/large\", nil)"), 0)
+	_ = f.Close()
+
+	// 4. Dockerfile with EXPOSE -> should be detected
+	dockerfile := filepath.Join(tmpDir, "Dockerfile")
+	_ = os.WriteFile(dockerfile, []byte("FROM alpine\nEXPOSE 8080\n"), 0644)
+
+	discovery, err := Discover(tmpDir)
+	if err != nil {
+		t.Fatalf("Discover failed: %v", err)
+	}
+
+	entryMap := make(map[string]bool)
+	for _, ep := range discovery.EntryPoints {
+		entryMap[ep] = true
+	}
+
+	if !entryMap["main.go"] {
+		t.Errorf("expected main.go to be an entry point")
+	}
+	if !entryMap["Dockerfile"] {
+		t.Errorf("expected Dockerfile to be an entry point")
+	}
+	if entryMap["server_test.go"] {
+		t.Errorf("server_test.go should be excluded from entry points")
+	}
+	if entryMap["large.go"] {
+		t.Errorf("large.go (> 1 MiB) should be excluded from entry points")
 	}
 }
 
