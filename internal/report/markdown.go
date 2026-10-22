@@ -39,6 +39,14 @@ func GenerateMarkdown(result *orchestrator.ScanResult, failOn string) string {
 	sb.WriteString(fmt.Sprintf("| **Low** | `%d` 🔵 |\n", result.Summary.Low))
 	sb.WriteString(fmt.Sprintf("| **Info** | `%d` ℹ️ |\n\n", result.Summary.Info))
 
+	if len(result.Warnings) > 0 {
+		sb.WriteString("### ⚠️ Warnings\n\n")
+		for _, w := range result.Warnings {
+			sb.WriteString(fmt.Sprintf("- ⚠️ %s\n", w))
+		}
+		sb.WriteString("\n")
+	}
+
 	if len(result.Findings) == 0 {
 		sb.WriteString("🎉 **Zero vulnerabilities or secrets detected! Your repository security posture is clean.**\n")
 		return sb.String()

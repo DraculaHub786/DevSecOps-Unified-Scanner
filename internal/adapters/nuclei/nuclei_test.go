@@ -44,3 +44,31 @@ func TestParseNucleiGolden(t *testing.T) {
 		t.Errorf("Expected message to contain '.git/config exposed', got %s", f.Message)
 	}
 }
+
+func TestNucleiIsApplicable(t *testing.T) {
+	adapter := New()
+
+	// 1. Nil discovery -> false
+	if adapter.IsApplicable(nil) {
+		t.Errorf("Expected IsApplicable(nil) to be false")
+	}
+
+	// 2. Empty target -> false
+	discoveryNoTarget := &orchestrator.DiscoveryResult{
+		RepoPath:  ".",
+		TargetURL: "",
+	}
+	if adapter.IsApplicable(discoveryNoTarget) {
+		t.Errorf("Expected IsApplicable to be false when TargetURL is empty")
+	}
+
+	// 3. Valid target -> true
+	discoveryWithTarget := &orchestrator.DiscoveryResult{
+		RepoPath:  ".",
+		TargetURL: "https://example.com",
+	}
+	if !adapter.IsApplicable(discoveryWithTarget) {
+		t.Errorf("Expected IsApplicable to be true when TargetURL is set")
+	}
+}
+

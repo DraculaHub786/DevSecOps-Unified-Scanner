@@ -4,6 +4,7 @@ package config
 type Config struct {
 	Version    int             `yaml:"version"`
 	Engine     string          `yaml:"engine"` // auto | external | embedded
+	Offline    bool            `yaml:"offline,omitempty"`
 	Scanners   ScannersConfig  `yaml:"scanners"`
 	Ignore     IgnoreConfig    `yaml:"ignore"`
 	Thresholds ThresholdConfig `yaml:"thresholds"`

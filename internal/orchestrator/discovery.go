@@ -9,10 +9,12 @@ import (
 // DiscoveryResult details the detected technical stack, manifests, and files in a target directory.
 type DiscoveryResult struct {
 	RepoPath     string   `json:"repo_path"`
+	TargetURL    string   `json:"target_url,omitempty"`
 	Languages    []string `json:"languages"`
 	Manifests    []string `json:"manifests"`
 	Lockfiles    []string `json:"lockfiles"`
 	IaCFiles     []string `json:"iac_files"`
+	EntryPoints  []string `json:"entry_points"`
 	HasGit       bool     `json:"has_git"`
 	TotalFiles   int      `json:"total_files"`
 }
@@ -25,11 +27,12 @@ func Discover(repoPath string) (*DiscoveryResult, error) {
 	}
 
 	result := &DiscoveryResult{
-		RepoPath:  absPath,
-		Languages: make([]string, 0),
-		Manifests: make([]string, 0),
-		Lockfiles: make([]string, 0),
-		IaCFiles:  make([]string, 0),
+		RepoPath:    absPath,
+		Languages:   make([]string, 0),
+		Manifests:   make([]string, 0),
+		Lockfiles:   make([]string, 0),
+		IaCFiles:    make([]string, 0),
+		EntryPoints: make([]string, 0),
 	}
 
 	// Check for .git directory
@@ -42,6 +45,7 @@ func Discover(repoPath string) (*DiscoveryResult, error) {
 	manifestSet := make(map[string]bool)
 	lockfileSet := make(map[string]bool)
 	iacSet := make(map[string]bool)
+	entryPointSet := make(map[string]bool)
 
 	ignoredDirs := map[string]bool{
 		".git":         true,
@@ -123,8 +127,11 @@ func Discover(repoPath string) (*DiscoveryResult, error) {
 		if strings.HasSuffix(baseName, ".k8s.yaml") || strings.HasSuffix(baseName, ".k8s.yml") {
 			iacSet[rel] = true
 		}
+		if (strings.HasSuffix(baseName, ".yml") || strings.HasSuffix(baseName, ".yaml")) && strings.Contains(rel, ".github/workflows") {
+			iacSet[rel] = true
+		}
 
-		// Source file extensions
+		// Source file extensions and entry points
 		ext := strings.ToLower(filepath.Ext(baseName))
 		switch ext {
 		case ".go":
@@ -147,6 +154,23 @@ func Discover(repoPath string) (*DiscoveryResult, error) {
 			langSet["php"] = true
 		}
 
+		// Check for entry point routes in source files or Dockerfiles
+		if ext == ".go" || ext == ".js" || ext == ".ts" || ext == ".py" || strings.Contains(baseName, "dockerfile") {
+			data, err := os.ReadFile(path)
+			if err == nil {
+				content := string(data)
+				if strings.Contains(content, "http.HandleFunc") ||
+					strings.Contains(content, "app.get(") ||
+					strings.Contains(content, "app.post(") ||
+					strings.Contains(content, "router.get(") ||
+					strings.Contains(content, "@app.route(") ||
+					strings.Contains(content, "r.GET(") ||
+					strings.Contains(content, "EXPOSE ") {
+					entryPointSet[rel] = true
+				}
+			}
+		}
+
 		return nil
 	})
 
@@ -161,6 +185,9 @@ func Discover(repoPath string) (*DiscoveryResult, error) {
 	}
 	for iac := range iacSet {
 		result.IaCFiles = append(result.IaCFiles, iac)
+	}
+	for ep := range entryPointSet {
+		result.EntryPoints = append(result.EntryPoints, ep)
 	}
 	result.TotalFiles = totalFiles
 

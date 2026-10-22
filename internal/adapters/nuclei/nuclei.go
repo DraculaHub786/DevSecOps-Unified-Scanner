@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os/exec"
 	"strings"
@@ -39,7 +40,7 @@ func (a *NucleiAdapter) Category() string {
 
 func (a *NucleiAdapter) IsApplicable(discovery *orchestrator.DiscoveryResult) bool {
 	// DAST is target-driven; applicable only when an explicit target is specified
-	return true
+	return discovery != nil && strings.TrimSpace(discovery.TargetURL) != ""
 }
 
 type nucleiJSONLine struct {
@@ -77,8 +78,8 @@ func (a *NucleiAdapter) Run(ctx context.Context, repoPath string, cfg *config.Co
 }
 
 func (a *NucleiAdapter) runCLI(ctx context.Context, binPath, targetURL string, cfg *config.Config) ([]orchestrator.Finding, error) {
-	// Passive templates only; no active attacks or load testing
-	toolRes, err := adapters.RunTool(ctx, binPath, "-u", targetURL, "-tags", "misconfig,exposure,headers", "-passive", "-jsonl", "-silent")
+	// Passive templates only with strict rate cap; no active attacks or load testing
+	toolRes, err := adapters.RunTool(ctx, binPath, "-u", targetURL, "-tags", "misconfig,exposure,headers", "-passive", "-rate-limit", "10", "-jsonl", "-silent")
 	if err != nil {
 		return nil, fmt.Errorf("nuclei execution failed: %w", err)
 	}
@@ -135,8 +136,30 @@ func ParseOutput(data []byte, targetURL string, cfg *config.Config) ([]orchestra
 func (a *NucleiAdapter) runPassiveNativeChecks(ctx context.Context, targetURL string, cfg *config.Config) ([]orchestrator.Finding, error) {
 	var findings []orchestrator.Finding
 
+	// Safe transport preventing DNS rebinding attacks at connect time
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			host, _, err := net.SplitHostPort(addr)
+			if err != nil {
+				host = addr
+			}
+			ips, err := net.LookupIP(host)
+			if err != nil {
+				return nil, err
+			}
+			for _, ip := range ips {
+				if safety.IsDisallowedIP(ip, cfg.Scanners.DAST.AllowPrivate) {
+					return nil, fmt.Errorf("connection refused: %s resolves to restricted/internal IP %s", host, ip)
+				}
+			}
+			var d net.Dialer
+			return d.DialContext(ctx, network, addr)
+		},
+	}
+
 	client := &http.Client{
-		Timeout: 6 * time.Second,
+		Transport: transport,
+		Timeout:   6 * time.Second,
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", targetURL, nil)

@@ -263,6 +263,7 @@ func (a *TrivyAdapter) runNativeFallback(repoPath string, cfg *config.Config, di
 	}
 
 	for _, rel := range targetFiles {
+		rel = filepath.ToSlash(rel)
 		if cfg.ShouldIgnorePath(rel) {
 			continue
 		}
@@ -364,6 +365,103 @@ func (a *TrivyAdapter) runNativeFallback(repoPath string, cfg *config.Config, di
 						f.RiskScore = orchestrator.CalculateRiskScore(&f)
 						f.FixSuggestion = orchestrator.GenerateRemediation(repoPath, &f)
 						findings = append(findings, f)
+					}
+				}
+			}
+			file.Close()
+		}
+
+		if (strings.HasSuffix(base, ".yml") || strings.HasSuffix(base, ".yaml")) && strings.Contains(rel, ".github/workflows") {
+			file, err := os.Open(fullPath)
+			if err != nil {
+				continue
+			}
+			scanner := bufio.NewScanner(file)
+			lineNum := 0
+			actionRefRegex := regexp.MustCompile(`(?i)^\s*(?:-\s*)?uses:\s*([a-zA-Z0-9_\-\/]+)@([^\s]+)`)
+shaRegex := regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
+
+			for scanner.Scan() {
+				lineNum++
+				line := scanner.Text()
+
+				// 1. Dangerous pull_request_target
+				if strings.Contains(line, "pull_request_target") {
+					findingID := orchestrator.GenerateID("trivy", "AVD-GHA-0001", rel, lineNum)
+					if !cfg.ShouldIgnoreFinding(findingID) {
+						f := orchestrator.Finding{
+							ID:          findingID,
+							Source:      "trivy",
+							Engine:      orchestrator.EngineEmbedded,
+							Category:    orchestrator.CategoryIaC,
+							Rule:        "AVD-GHA-0001",
+							Severity:    orchestrator.SeverityHigh,
+							CWE:         "CWE-284",
+							File:        rel,
+							LineStart:   lineNum,
+							LineEnd:     lineNum,
+							Message:     "Workflow uses dangerous 'pull_request_target' trigger; this may expose repository secrets or execute untrusted code from forks",
+							FirstSeen:   time.Now().UTC(),
+							Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategoryIaC, "AVD-GHA-0001", rel, line),
+						}
+						f.RiskScore = orchestrator.CalculateRiskScore(&f)
+						f.FixSuggestion = orchestrator.GenerateRemediation(repoPath, &f)
+						findings = append(findings, f)
+					}
+				}
+
+				// 2. Overly broad permissions
+				if strings.Contains(line, "write-all") {
+					findingID := orchestrator.GenerateID("trivy", "AVD-GHA-0003", rel, lineNum)
+					if !cfg.ShouldIgnoreFinding(findingID) {
+						f := orchestrator.Finding{
+							ID:          findingID,
+							Source:      "trivy",
+							Engine:      orchestrator.EngineEmbedded,
+							Category:    orchestrator.CategoryIaC,
+							Rule:        "AVD-GHA-0003",
+							Severity:    orchestrator.SeverityHigh,
+							CWE:         "CWE-732",
+							File:        rel,
+							LineStart:   lineNum,
+							LineEnd:     lineNum,
+							Message:     "Overly broad workflow permission 'write-all' detected; enforce least-privilege permissions",
+							FirstSeen:   time.Now().UTC(),
+							Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategoryIaC, "AVD-GHA-0003", rel, line),
+						}
+						f.RiskScore = orchestrator.CalculateRiskScore(&f)
+						f.FixSuggestion = orchestrator.GenerateRemediation(repoPath, &f)
+						findings = append(findings, f)
+					}
+				}
+
+				// 3. Unpinned GitHub Actions reference
+				if m := actionRefRegex.FindStringSubmatch(line); len(m) > 2 {
+					actionName := m[1]
+					actionRef := m[2]
+					// Exclude local action references (./.github/actions/...) and pinned 40-char SHAs
+					if !strings.HasPrefix(actionName, ".") && !shaRegex.MatchString(actionRef) {
+						findingID := orchestrator.GenerateID("trivy", "AVD-GHA-0002", rel, lineNum)
+						if !cfg.ShouldIgnoreFinding(findingID) {
+							f := orchestrator.Finding{
+								ID:          findingID,
+								Source:      "trivy",
+								Engine:      orchestrator.EngineEmbedded,
+								Category:    orchestrator.CategoryIaC,
+								Rule:        "AVD-GHA-0002",
+								Severity:    orchestrator.SeverityMedium,
+								CWE:         "CWE-1357",
+								File:        rel,
+								LineStart:   lineNum,
+								LineEnd:     lineNum,
+								Message:     fmt.Sprintf("GitHub Action '%s@%s' is not pinned to a commit SHA; pin to full 40-character SHA to prevent supply-chain tampering", actionName, actionRef),
+								FirstSeen:   time.Now().UTC(),
+								Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategoryIaC, "AVD-GHA-0002", rel, line),
+							}
+							f.RiskScore = orchestrator.CalculateRiskScore(&f)
+							f.FixSuggestion = orchestrator.GenerateRemediation(repoPath, &f)
+							findings = append(findings, f)
+						}
 					}
 				}
 			}

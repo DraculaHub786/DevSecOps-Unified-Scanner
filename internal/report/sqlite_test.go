@@ -133,3 +133,31 @@ func TestSQLiteStoreRecordListAndCompare(t *testing.T) {
 		t.Errorf("Expected unchanged finding fp-2, got %s", diff.Unchanged[0].Fingerprint)
 	}
 }
+
+func TestSQLiteStoreBaseline(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "sentinel-sqlite-baseline-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	store, err := NewSQLiteStore(tmpDir)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore failed: %v", err)
+	}
+
+	fps := []string{"fp-alpha", "fp-beta", "fp-alpha"} // with duplicate
+	if err := store.SaveBaseline(fps); err != nil {
+		t.Fatalf("SaveBaseline failed: %v", err)
+	}
+
+	loaded, err := store.GetBaseline()
+	if err != nil {
+		t.Fatalf("GetBaseline failed: %v", err)
+	}
+
+	if len(loaded) != 2 {
+		t.Fatalf("Expected 2 unique baseline fingerprints, got %d (%v)", len(loaded), loaded)
+	}
+}
+

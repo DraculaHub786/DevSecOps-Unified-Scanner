@@ -85,3 +85,54 @@ func TestFailOnLicense(t *testing.T) {
 	}
 }
 
+func TestSupplyChainChecks(t *testing.T) {
+	adapter := New()
+	cfg := config.DefaultConfig()
+
+	tmpDir := t.TempDir()
+	pkgJSON := `{
+  "dependencies": {
+    "lodashs": "4.17.21",
+    "express": "*"
+  }
+}`
+	if err := os.WriteFile(filepath.Join(tmpDir, "package.json"), []byte(pkgJSON), 0644); err != nil {
+		t.Fatalf("Failed to write mock package.json: %v", err)
+	}
+
+	discovery := &orchestrator.DiscoveryResult{
+		Manifests: []string{"package.json"},
+	}
+
+	findings, err := adapter.runNativeFallback(tmpDir, cfg, discovery)
+	if err != nil {
+		t.Fatalf("runNativeFallback failed: %v", err)
+	}
+
+	foundTyposquat := false
+	foundUnpinned := false
+
+	for _, f := range findings {
+		if f.Rule == "SUPPLY-CHAIN-TYPOSQUAT" {
+			foundTyposquat = true
+			if f.Severity != orchestrator.SeverityHigh {
+				t.Errorf("Expected high severity for typosquatting, got %s", f.Severity)
+			}
+		}
+		if f.Rule == "SUPPLY-CHAIN-UNPINNED" {
+			foundUnpinned = true
+			if f.Severity != orchestrator.SeverityMedium {
+				t.Errorf("Expected medium severity for unpinned dependency, got %s", f.Severity)
+			}
+		}
+	}
+
+	if !foundTyposquat {
+		t.Errorf("Expected SUPPLY-CHAIN-TYPOSQUAT finding for 'lodashs', but none found")
+	}
+	if !foundUnpinned {
+		t.Errorf("Expected SUPPLY-CHAIN-UNPINNED finding for 'express: *', but none found")
+	}
+}
+
+

@@ -38,6 +38,8 @@ func newScanCmd() *cobra.Command {
 		formatStr      string
 		outFile        string
 		offline        bool
+		authorized     bool
+		configPath     string
 		repoPath       string
 	)
 
@@ -54,6 +56,7 @@ func newScanCmd() *cobra.Command {
 
 			runScanInternal(
 				repoPath,
+				configPath,
 				onlyCategories,
 				skipCategories,
 				changedOnly,
@@ -65,14 +68,18 @@ func newScanCmd() *cobra.Command {
 				allowLite,
 				useBaseline,
 				targetURL,
+				offline,
+				authorized,
 			)
 		},
 	}
 
+	cmd.Flags().StringVar(&configPath, "config", "", "Explicit path to .sentinel.yml policy file (e.g. from trusted base ref)")
 	cmd.Flags().StringSliceVar(&onlyCategories, "only", nil, "Scan specific categories only (sast,sca,secrets,iac,dast,resilience)")
 	cmd.Flags().StringSliceVar(&skipCategories, "skip", nil, "Skip specific categories")
 	cmd.Flags().StringVar(&targetURL, "target", "", "Target URL for DAST scanning")
 	cmd.Flags().BoolVar(&dastFlag, "dast", false, "Enable DAST runtime scanning")
+	cmd.Flags().BoolVar(&authorized, "i-have-authorization", false, "Mandatory authorization flag for DAST scanning")
 	cmd.Flags().BoolVar(&resilienceFlag, "resilience", false, "Enable resilience/DoS posture checks")
 	cmd.Flags().BoolVar(&ciMode, "ci", false, "CI mode: fail build on threshold and halt if missing tools unless --allow-lite")
 	cmd.Flags().BoolVar(&allowLite, "allow-lite", false, "Allow embedded fallback engines to run in --ci mode without failing")
@@ -88,6 +95,7 @@ func newScanCmd() *cobra.Command {
 
 func runScanInternal(
 	repoPath string,
+	configPath string,
 	onlyCategories []string,
 	skipCategories []string,
 	changedOnly bool,
@@ -99,6 +107,8 @@ func runScanInternal(
 	allowLite bool,
 	useBaseline bool,
 	targetURL string,
+	offline bool,
+	authorized bool,
 ) {
 	absRepo, err := filepath.Abs(repoPath)
 	if err != nil {
@@ -106,10 +116,30 @@ func runScanInternal(
 		os.Exit(2)
 	}
 
-	cfg, err := config.Load(absRepo)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to load .sentinel.yml: %v (using defaults)\n", err)
-		cfg = config.DefaultConfig()
+	var cfg *config.Config
+	if configPath != "" {
+		loaded, err := config.LoadFile(configPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error loading policy from %s: %v\n", configPath, err)
+			os.Exit(2)
+		}
+		cfg = loaded
+		if auditWarnings := config.Audit(cfg); len(auditWarnings) > 0 {
+			for _, w := range auditWarnings {
+				fmt.Fprintf(os.Stderr, "⚠️ Policy Audit: %s\n", w)
+			}
+		}
+	} else {
+		loaded, err := config.Load(absRepo)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to load .sentinel.yml: %v (using defaults)\n", err)
+			loaded = config.DefaultConfig()
+		}
+		cfg = loaded
+	}
+
+	if offline {
+		cfg.Offline = true
 	}
 
 	if failOn != "" {
@@ -130,7 +160,7 @@ func runScanInternal(
 		osv.New(),
 		semgrep.New(),
 		trivy.New(),
-		nuclei.New(),
+		nuclei.NewWithAuth(authorized),
 		resilience.New(),
 	)
 

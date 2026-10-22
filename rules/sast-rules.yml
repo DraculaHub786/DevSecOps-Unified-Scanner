@@ -1,29 +1,503 @@
 rules:
-  - id: org-no-hardcoded-credentials
+  # ==========================================
+  # 1. HARDCODED CREDENTIALS & SECRETS
+  # ==========================================
+  - id: org-hardcoded-aws-credentials
     patterns:
       - pattern-either:
-          - pattern: $KEY = "AKIA..."
-          - pattern: $TOKEN = "ghp_..."
-    message: Hardcoded credentials or secrets violate organizational security policy. Use environment variables.
+          - pattern: $KEY = "AKIA[0-9A-Z]{16}"
+          - pattern: aws_access_key_id = "AKIA[0-9A-Z]{16}"
+          - pattern: AWS_ACCESS_KEY_ID = "AKIA[0-9A-Z]{16}"
+    message: Hardcoded AWS Access Key ID detected. Use environment variables or IAM roles.
+    severity: ERROR
+    languages: [go, javascript, typescript, python, java]
+    metadata:
+      cwe: "CWE-798"
+
+  - id: org-hardcoded-github-token
+    patterns:
+      - pattern-either:
+          - pattern: $TOKEN = "ghp_[0-9a-zA-Z]{36}"
+          - pattern: $TOKEN = "gho_[0-9a-zA-Z]{36}"
+          - pattern: GITHUB_TOKEN = "ghp_[0-9a-zA-Z]{36}"
+    message: Hardcoded GitHub token detected. Store secrets in environment variables or secret managers.
+    severity: ERROR
+    languages: [go, javascript, typescript, python, java]
+    metadata:
+      cwe: "CWE-798"
+
+  - id: org-hardcoded-jwt-secret
+    patterns:
+      - pattern-either:
+          - pattern: jwt.Sign($PAYLOAD, "...", ...)
+          - pattern: jwt.sign($PAYLOAD, "...", ...)
+          - pattern: jwt.verify($TOKEN, "...", ...)
+          - pattern: jwt.Verify($TOKEN, "...", ...)
+          - pattern: jwt.encode($PAYLOAD, "...", ...)
+          - pattern: jwt.decode($TOKEN, "...", ...)
+    message: Hardcoded JWT secret key string literal detected. Load signing keys from secure environment variables.
     severity: ERROR
     languages: [go, javascript, typescript, python]
     metadata:
       cwe: "CWE-798"
 
-  - id: org-parameterized-queries-only
+  - id: org-hardcoded-slack-webhook
     patterns:
-      - pattern: db.Query(fmt.Sprintf(...))
-    message: SQL queries must use parameterized placeholders instead of string formatting to prevent SQL injection.
+      - pattern-regex: 'https://hooks\.slack\.com/services/T[0-9A-Za-z_]+/B[0-9A-Za-z_]+/[0-9A-Za-z_]+'
+    message: Hardcoded Slack Incoming Webhook URL detected. Store webhooks in environment variables.
+    severity: ERROR
+    languages: [go, javascript, typescript, python, java]
+    metadata:
+      cwe: "CWE-798"
+
+  # ==========================================
+  # 2. SQL INJECTION (CWE-89)
+  # ==========================================
+  - id: org-go-sql-injection-sprintf
+    patterns:
+      - pattern-either:
+          - pattern: $DB.Query(fmt.Sprintf(...), ...)
+          - pattern: $DB.QueryRow(fmt.Sprintf(...), ...)
+          - pattern: $DB.Exec(fmt.Sprintf(...), ...)
+          - pattern: $DB.QueryContext($CTX, fmt.Sprintf(...), ...)
+          - pattern: $DB.ExecContext($CTX, fmt.Sprintf(...), ...)
+    message: SQL query constructed via fmt.Sprintf string formatting. Use parameterized queries (? or $1) to prevent SQL injection.
     severity: ERROR
     languages: [go]
     metadata:
       cwe: "CWE-89"
 
-  - id: org-enforce-tls-verification
+  - id: org-go-sql-injection-concat
     patterns:
-      - pattern: InsecureSkipVerify: true
+      - pattern-either:
+          - pattern: $DB.Query("..." + $INPUT, ...)
+          - pattern: $DB.Exec("..." + $INPUT, ...)
+          - pattern: $DB.QueryRow("..." + $INPUT, ...)
+    message: SQL query constructed via string concatenation. Use parameterized placeholders to prevent SQL injection.
+    severity: ERROR
+    languages: [go]
+    metadata:
+      cwe: "CWE-89"
+
+  - id: org-js-sql-injection-concat
+    patterns:
+      - pattern-either:
+          - pattern: $DB.query("..." + $INPUT, ...)
+          - pattern: $DB.execute("..." + $INPUT, ...)
+          - pattern: $DB.query(`...${$INPUT}...`, ...)
+    message: Database query constructed via string concatenation or template literal. Use prepared statements or parameterized queries.
+    severity: ERROR
+    languages: [javascript, typescript]
+    metadata:
+      cwe: "CWE-89"
+
+  - id: org-python-sql-injection-format
+    patterns:
+      - pattern-either:
+          - pattern: $CURSOR.execute(f"...")
+          - pattern: $CURSOR.execute("..." % ...)
+          - pattern: $CURSOR.execute("...".format(...))
+          - pattern: $CURSOR.execute("..." + $INPUT)
+    message: SQL query formatted dynamically with string interpolation or concatenation. Pass parameters as a separate tuple to execute().
+    severity: ERROR
+    languages: [python]
+    metadata:
+      cwe: "CWE-89"
+
+  - id: org-java-sql-injection-concat
+    patterns:
+      - pattern-either:
+          - pattern: $STMT.executeQuery("..." + $INPUT)
+          - pattern: $STMT.executeUpdate("..." + $INPUT)
+          - pattern: $STMT.execute("..." + $INPUT)
+    message: Dynamic SQL execution via String concatenation. Use java.sql.PreparedStatement with parameter binding.
+    severity: ERROR
+    languages: [java]
+    metadata:
+      cwe: "CWE-89"
+
+  # ==========================================
+  # 3. COMMAND & CODE INJECTION (CWE-78, CWE-94)
+  # ==========================================
+  - id: org-go-command-injection-sh
+    patterns:
+      - pattern-either:
+          - pattern: exec.Command("sh", "-c", $CMD, ...)
+          - pattern: exec.Command("bash", "-c", $CMD, ...)
+          - pattern: exec.CommandContext($CTX, "sh", "-c", $CMD, ...)
+          - pattern: exec.CommandContext($CTX, "bash", "-c", $CMD, ...)
+    message: Spawning a shell with 'sh -c' or 'bash -c' allows arbitrary command injection if input is untrusted. Execute the target binary directly with argument slices.
+    severity: ERROR
+    languages: [go]
+    metadata:
+      cwe: "CWE-78"
+
+  - id: org-js-command-injection-exec
+    patterns:
+      - pattern-either:
+          - pattern: child_process.exec($CMD, ...)
+          - pattern: exec($CMD, ...)
+          - pattern: child_process.execSync($CMD, ...)
+          - pattern: execSync($CMD, ...)
+    message: Use of child_process.exec executes commands inside a shell, allowing command injection. Use child_process.execFile or child_process.spawn with an argument array.
+    severity: ERROR
+    languages: [javascript, typescript]
+    metadata:
+      cwe: "CWE-78"
+
+  - id: org-js-code-injection-eval
+    patterns:
+      - pattern-either:
+          - pattern: eval($CODE)
+          - pattern: Function($CODE)
+          - pattern: setTimeout($CODE, ...)
+          - pattern: setInterval($CODE, ...)
+    message: Dynamic code evaluation using eval() or Function() allows remote code execution (RCE).
+    severity: ERROR
+    languages: [javascript, typescript]
+    metadata:
+      cwe: "CWE-94"
+
+  - id: org-python-command-injection-shell
+    patterns:
+      - pattern-either:
+          - pattern: subprocess.check_output(..., shell=True, ...)
+          - pattern: subprocess.Popen(..., shell=True, ...)
+          - pattern: subprocess.run(..., shell=True, ...)
+          - pattern: os.system(...)
+          - pattern: os.popen(...)
+    message: subprocess executed with shell=True or os.system() enables command injection. Set shell=False and pass arguments as a list.
+    severity: ERROR
+    languages: [python]
+    metadata:
+      cwe: "CWE-78"
+
+  - id: org-python-code-injection-eval
+    patterns:
+      - pattern-either:
+          - pattern: eval($INPUT)
+          - pattern: exec($INPUT)
+    message: Dynamic code execution via eval() or exec() allows arbitrary code execution.
+    severity: ERROR
+    languages: [python]
+    metadata:
+      cwe: "CWE-94"
+
+  - id: org-java-command-injection-runtime
+    patterns:
+      - pattern-either:
+          - pattern: Runtime.getRuntime().exec($CMD)
+          - pattern: new ProcessBuilder($CMD)
+    message: Runtime.exec executing command strings can lead to command injection. Use ProcessBuilder with explicit tokenized argument lists.
+    severity: ERROR
+    languages: [java]
+    metadata:
+      cwe: "CWE-78"
+
+  # ==========================================
+  # 4. INSECURE TLS & NETWORK TRANSPORT (CWE-295)
+  # ==========================================
+  - id: org-go-insecure-skip-verify
+    patterns:
+      - pattern: "InsecureSkipVerify: true"
     message: InsecureSkipVerify disables TLS certificate authentication and enables Man-in-the-Middle (MitM) attacks.
     severity: ERROR
     languages: [go]
     metadata:
       cwe: "CWE-295"
+
+  - id: org-python-requests-verify-false
+    patterns:
+      - pattern-either:
+          - pattern: requests.get(..., verify=False, ...)
+          - pattern: requests.post(..., verify=False, ...)
+          - pattern: requests.put(..., verify=False, ...)
+          - pattern: requests.delete(..., verify=False, ...)
+          - pattern: requests.request(..., verify=False, ...)
+    message: Disabling TLS verification (verify=False) exposes HTTP traffic to credential theft and MitM interception.
+    severity: ERROR
+    languages: [python]
+    metadata:
+      cwe: "CWE-295"
+
+  - id: org-js-reject-unauthorized-false
+    patterns:
+      - pattern-either:
+          - pattern: "rejectUnauthorized: false"
+          - pattern: process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'
+          - pattern: process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"
+    message: Setting rejectUnauthorized:false or NODE_TLS_REJECT_UNAUTHORIZED='0' disables TLS server identity verification.
+    severity: ERROR
+    languages: [javascript, typescript]
+    metadata:
+      cwe: "CWE-295"
+
+  # ==========================================
+  # 5. WEAK CRYPTOGRAPHY & CIPHERS (CWE-327, CWE-328, CWE-338)
+  # ==========================================
+  - id: org-go-weak-crypto-md5-sha1
+    patterns:
+      - pattern-either:
+          - pattern: md5.New()
+          - pattern: md5.Sum(...)
+          - pattern: sha1.New()
+          - pattern: sha1.Sum(...)
+    message: MD5 and SHA-1 are cryptographically broken hash functions vulnerable to collision attacks. Use SHA-256, SHA-512, or SHA-3.
+    severity: WARNING
+    languages: [go]
+    metadata:
+      cwe: "CWE-328"
+
+  - id: org-python-weak-crypto-md5-sha1
+    patterns:
+      - pattern-either:
+          - pattern: hashlib.md5(...)
+          - pattern: hashlib.sha1(...)
+    message: MD5 and SHA-1 are cryptographically broken hash algorithms. Use hashlib.sha256() or hashlib.sha3_256().
+    severity: WARNING
+    languages: [python]
+    metadata:
+      cwe: "CWE-328"
+
+  - id: org-js-weak-crypto-md5-sha1
+    patterns:
+      - pattern-either:
+          - pattern: crypto.createHash("md5")
+          - pattern: crypto.createHash("sha1")
+          - pattern: crypto.createHash('md5')
+          - pattern: crypto.createHash('sha1')
+    message: Weak hash algorithm MD5/SHA-1 specified in createHash. Use 'sha256' or 'sha512'.
+    severity: WARNING
+    languages: [javascript, typescript]
+    metadata:
+      cwe: "CWE-328"
+
+  - id: org-go-weak-des-cipher
+    patterns:
+      - pattern-either:
+          - pattern: des.NewCipher(...)
+          - pattern: des.NewTripleDESCipher(...)
+    message: DES and Triple-DES (3DES) have small 64-bit block sizes vulnerable to collision and sweet32 attacks. Use AES-GCM (aes.NewCipher).
+    severity: ERROR
+    languages: [go]
+    metadata:
+      cwe: "CWE-327"
+
+  - id: org-go-insecure-random-number
+    patterns:
+      - pattern: math/rand.$FUNC(...)
+    message: math/rand produces pseudorandom sequences unsuitable for cryptographic or security-sensitive values (tokens, salts, keys). Use crypto/rand.
+    severity: WARNING
+    languages: [go]
+    metadata:
+      cwe: "CWE-338"
+
+  - id: org-python-insecure-random
+    patterns:
+      - pattern-either:
+          - pattern: random.random()
+          - pattern: random.randint(...)
+          - pattern: random.choice(...)
+    message: standard 'random' module produces predictable numbers via Mersenne Twister. Use the 'secrets' module for security-sensitive tokens and passwords.
+    severity: WARNING
+    languages: [python]
+    metadata:
+      cwe: "CWE-338"
+
+  - id: org-js-insecure-math-random
+    patterns:
+      - pattern: Math.random()
+    message: Math.random() is cryptographically insecure and predictable. Use crypto.randomBytes() or crypto.getRandomValues().
+    severity: WARNING
+    languages: [javascript, typescript]
+    metadata:
+      cwe: "CWE-338"
+
+  # ==========================================
+  # 6. PATH TRAVERSAL (CWE-22)
+  # ==========================================
+  - id: org-go-path-traversal-open
+    patterns:
+      - pattern-either:
+          - pattern: os.Open(filepath.Join(..., $INPUT))
+          - pattern: os.ReadFile(filepath.Join(..., $INPUT))
+          - pattern: ioutil.ReadFile(filepath.Join(..., $INPUT))
+    message: Joining user-controlled path parameters with filepath.Join without filepath.Clean and prefix checks allows directory traversal (dot-dot-slash / ../).
+    severity: ERROR
+    languages: [go]
+    metadata:
+      cwe: "CWE-22"
+
+  - id: org-js-path-traversal-fs
+    patterns:
+      - pattern-either:
+          - pattern: fs.readFile(path.join(..., $REQ.params.$P), ...)
+          - pattern: fs.readFile(path.join(..., $REQ.query.$P), ...)
+          - pattern: fs.readFileSync(path.join(..., $REQ.query.$P), ...)
+    message: File path constructed from request parameters without containment verification can result in arbitrary file disclosure.
+    severity: ERROR
+    languages: [javascript, typescript]
+    metadata:
+      cwe: "CWE-22"
+
+  - id: org-python-path-traversal-open
+    patterns:
+      - pattern-either:
+          - pattern: open(os.path.join(..., $INPUT))
+          - pattern: open(f".../{$INPUT}")
+    message: Opening paths constructed with dynamic input without verifying realpath containment allows path traversal attacks.
+    severity: ERROR
+    languages: [python]
+    metadata:
+      cwe: "CWE-22"
+
+  # ==========================================
+  # 7. UNSAFE DESERIALIZATION & PARSING (CWE-502, CWE-611)
+  # ==========================================
+  - id: org-python-unsafe-pickle
+    patterns:
+      - pattern-either:
+          - pattern: pickle.loads(...)
+          - pattern: pickle.load(...)
+          - pattern: _pickle.loads(...)
+    message: Deserializing untrusted data with pickle allows arbitrary code execution. Use safer serialization formats such as JSON.
+    severity: ERROR
+    languages: [python]
+    metadata:
+      cwe: "CWE-502"
+
+  - id: org-python-unsafe-yaml-load
+    patterns:
+      - pattern: yaml.load($STREAM)
+    message: yaml.load without Loader=yaml.SafeLoader or using yaml.unsafe_load allows arbitrary Python object instantiation and code execution. Use yaml.safe_load().
+    severity: ERROR
+    languages: [python]
+    metadata:
+      cwe: "CWE-502"
+
+  - id: org-java-unsafe-object-input-stream
+    patterns:
+      - pattern: new ObjectInputStream($STREAM).readObject()
+    message: Deserializing untrusted byte streams using ObjectInputStream allows remote code execution gadget chains.
+    severity: ERROR
+    languages: [java]
+    metadata:
+      cwe: "CWE-502"
+
+  - id: org-java-xxe-document-builder
+    patterns:
+      - pattern: DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(...)
+    message: DocumentBuilder XML parser created without disabling DOCTYPE declarations or external entity resolution is vulnerable to XXE.
+    severity: ERROR
+    languages: [java]
+    metadata:
+      cwe: "CWE-611"
+
+  # ==========================================
+  # 8. WEB VULNERABILITIES: SSRF, CORS, REDIRECT (CWE-918, CWE-601, CWE-942)
+  # ==========================================
+  - id: org-js-open-redirect
+    patterns:
+      - pattern-either:
+          - pattern: $RES.redirect($REQ.query.$URL)
+          - pattern: $RES.redirect($REQ.params.$URL)
+          - pattern: $RES.redirect($REQ.body.$URL)
+    message: Unvalidated URL redirect using raw request parameter allows phishing and open redirect attacks.
+    severity: ERROR
+    languages: [javascript, typescript]
+    metadata:
+      cwe: "CWE-601"
+
+  - id: org-python-open-redirect
+    patterns:
+      - pattern-either:
+          - pattern: redirect(request.args.get($PARAM))
+          - pattern: redirect(request.GET.get($PARAM))
+    message: Redirecting directly to an untrusted URL parameter facilitates phishing attacks. Validate against an internal URL whitelist.
+    severity: ERROR
+    languages: [python]
+    metadata:
+      cwe: "CWE-601"
+
+  - id: org-js-cors-wildcard-with-credentials
+    patterns:
+      - pattern-either:
+          - pattern: |
+              cors({
+                origin: "*",
+                credentials: true,
+                ...
+              })
+          - pattern: |
+              cors({
+                origin: true,
+                credentials: true,
+                ...
+              })
+    message: "Insecure CORS configuration: combining wildcard or reflection origin with credentials:true allows unauthorized third-party websites to exfiltrate authenticated data."
+    severity: ERROR
+    languages: [javascript, typescript]
+    metadata:
+      cwe: "CWE-942"
+
+  - id: org-js-ssrf-axios-fetch
+    patterns:
+      - pattern-either:
+          - pattern: axios.get($REQ.query.$URL, ...)
+          - pattern: axios.post($REQ.query.$URL, ...)
+          - pattern: fetch($REQ.query.$URL, ...)
+    message: Making server-side HTTP requests directly to a user-supplied URL without allowlisting or IP validation exposes internal cloud metadata (SSRF).
+    severity: ERROR
+    languages: [javascript, typescript]
+    metadata:
+      cwe: "CWE-918"
+
+  - id: org-python-ssrf-requests
+    patterns:
+      - pattern-either:
+          - pattern: requests.get(request.args.get(...), ...)
+          - pattern: requests.post(request.args.get(...), ...)
+          - pattern: urllib.request.urlopen(request.args.get(...))
+    message: Request made directly to user-supplied endpoint without IP/hostname validation can lead to Server-Side Request Forgery (SSRF).
+    severity: ERROR
+    languages: [python]
+    metadata:
+      cwe: "CWE-918"
+
+  - id: org-js-cookie-missing-httponly-secure
+    patterns:
+      - pattern: |
+          res.cookie($NAME, $VAL, {
+            ...,
+            httpOnly: false,
+            ...
+          })
+    message: "Cookie set with httpOnly:false allows client-side JavaScript access, increasing susceptibility to XSS session hijacking."
+    severity: WARNING
+    languages: [javascript, typescript]
+    metadata:
+      cwe: "CWE-1004"
+
+  - id: org-js-raw-innerhtml-xss
+    patterns:
+      - pattern-either:
+          - pattern: $EL.innerHTML = $INPUT
+          - pattern: $EL.outerHTML = $INPUT
+          - pattern: document.write($INPUT)
+    message: Assigning untrusted data directly to innerHTML, outerHTML, or document.write causes DOM Cross-Site Scripting (XSS). Use textContent or safe DOM APIs.
+    severity: ERROR
+    languages: [javascript, typescript]
+    metadata:
+      cwe: "CWE-79"
+
+  - id: org-go-bind-all-interfaces
+    patterns:
+      - pattern-either:
+          - pattern: net.Listen("tcp", ":0")
+          - pattern: net.Listen("tcp", ":$PORT")
+          - pattern: http.ListenAndServe(":$PORT", ...)
+    message: Service explicitly binds to all network interfaces (0.0.0.0 / inaddr_any). Verify whether internal services should bind strictly to 127.0.0.1.
+    severity: INFO
+    languages: [go]
+    metadata:
+      cwe: "CWE-1327"

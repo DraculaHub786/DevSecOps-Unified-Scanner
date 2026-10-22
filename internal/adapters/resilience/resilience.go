@@ -77,7 +77,7 @@ func (a *ResilienceAdapter) Run(ctx context.Context, repoPath string, cfg *confi
 			Severity:    orchestrator.SeverityMedium,
 			CWE:         "CWE-1333", // Inefficient Regular Expression Complexity (ReDoS)
 			Description: "Potentially vulnerable catastrophic backtracking regex pattern detected with nested quantifiers",
-			Pattern:     regexp.MustCompile(`\([a-zA-Z0-9_\.\*\+\?]+\+[\*\+]+\)`),
+			Pattern:     regexp.MustCompile(`\([^)]*[\*\+]\)[\*\+]`),
 			Exts:        []string{".js", ".ts", ".py", ".go"},
 		},
 	}

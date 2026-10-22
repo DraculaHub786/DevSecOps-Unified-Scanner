@@ -171,3 +171,64 @@ thresholds:
 	}
 }
 
+func TestConfigLoadFileAndAudit(t *testing.T) {
+	tmpDir := t.TempDir()
+	customPath := filepath.Join(tmpDir, "custom-trusted-policy.yml")
+	content := `version: 1
+thresholds:
+  fail_on: "critical"
+scanners:
+  sast:
+    enabled: false
+  secrets:
+    enabled: true
+  sca:
+    enabled: true
+  iac:
+    enabled: false
+  dast:
+    enabled: false
+  resilience:
+    enabled: true
+ignore:
+  paths:
+    - "**/*"
+`
+	if err := os.WriteFile(customPath, []byte(content), 0644); err != nil {
+		t.Fatalf("Failed to write custom policy: %v", err)
+	}
+
+	cfg, err := LoadFile(customPath)
+	if err != nil {
+		t.Fatalf("LoadFile failed: %v", err)
+	}
+	if cfg.Thresholds.FailOn != "critical" {
+		t.Errorf("Expected fail_on critical, got %s", cfg.Thresholds.FailOn)
+	}
+
+	warnings := Audit(cfg)
+	if len(warnings) < 3 {
+		t.Errorf("Expected at least 3 audit warnings for weakened policy, got %d: %v", len(warnings), warnings)
+	}
+
+	hasWeakThreshold := false
+	hasDisabledSAST := false
+	hasBroadIgnore := false
+	for _, w := range warnings {
+		if strings.Contains(w, "Policy threshold 'fail_on: critical' is weakened") {
+			hasWeakThreshold = true
+		}
+		if strings.Contains(w, "SAST static analysis scanner is disabled") {
+			hasDisabledSAST = true
+		}
+		if strings.Contains(w, "Overly broad ignore path") {
+			hasBroadIgnore = true
+		}
+	}
+
+	if !hasWeakThreshold || !hasDisabledSAST || !hasBroadIgnore {
+		t.Errorf("Missing expected audit warnings: %v", warnings)
+	}
+}
+
+

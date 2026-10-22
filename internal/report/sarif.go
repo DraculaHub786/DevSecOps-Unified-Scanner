@@ -118,6 +118,11 @@ func GenerateSARIF(findings []orchestrator.Finding) ([]byte, error) {
 			lineEnd = lineStart
 		}
 
+		fp := f.Fingerprint
+		if fp == "" {
+			fp = f.ID
+		}
+
 		res := SARIFResult{
 			RuleID: ruleID,
 			Level:  level,
@@ -125,8 +130,9 @@ func GenerateSARIF(findings []orchestrator.Finding) ([]byte, error) {
 				Text: f.Message,
 			},
 			PartialFingerprints: map[string]string{
-				"primaryLocationLineHash": f.Fingerprint,
+				"primaryLocationLineHash": fp,
 			},
+
 			Properties: map[string]string{
 				"engine":    f.Engine,
 				"riskScore": fmt.Sprintf("%.1f", f.RiskScore),
@@ -164,11 +170,12 @@ func GenerateSARIF(findings []orchestrator.Finding) ([]byte, error) {
 				Tool: SARIFTool{
 					Driver: SARIFDriver{
 						Name:           "Sentinel",
-						Version:        "1.0.0",
+						Version:        "0.1.1",
 						InformationURI: "https://github.com/DraculaHub786/DevSecOps-Unified-Scanner",
 						Rules:          rules,
 					},
 				},
+
 				Results: results,
 			},
 		},

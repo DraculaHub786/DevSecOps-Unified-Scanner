@@ -15,6 +15,7 @@ import (
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/adapters"
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/config"
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/orchestrator"
+	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/rules"
 )
 
 // SemgrepAdapter executes Semgrep for static application security testing (SAST),
@@ -76,19 +77,60 @@ func (a *SemgrepAdapter) Run(ctx context.Context, repoPath string, cfg *config.C
 	return a.runCLI(ctx, binPath, repoPath, cfg)
 }
 
+func resolveRulesConfig(repoPath string, cfg *config.Config) (string, func(), error) {
+	if cfg.Scanners.SAST.Ruleset != "" && cfg.Scanners.SAST.Ruleset != "auto" {
+		return cfg.Scanners.SAST.Ruleset, nil, nil
+	}
+
+	// 1. Check local repoPath/rules
+	localRules := filepath.Join(repoPath, "rules")
+	if fi, err := os.Stat(localRules); err == nil && fi.IsDir() {
+		return localRules, nil, nil
+	}
+
+	// 2. Check current working directory rules/
+	cwdRules := filepath.Join(".", "rules")
+	if fi, err := os.Stat(cwdRules); err == nil && fi.IsDir() {
+		return cwdRules, nil, nil
+	}
+
+	// 3. If offline, extract embedded rules so network egress is never attempted
+	if cfg.Offline {
+		tmpDir, err := os.MkdirTemp("", "sentinel-embedded-rules-*")
+		if err != nil {
+			return "rules/", nil, nil
+		}
+		cleanup := func() {
+			_ = os.RemoveAll(tmpDir)
+		}
+
+		entries, err := rules.Content.ReadDir(".")
+		if err == nil {
+			for _, entry := range entries {
+				if entry.IsDir() {
+					continue
+				}
+				data, err := rules.Content.ReadFile(entry.Name())
+				if err == nil {
+					_ = os.WriteFile(filepath.Join(tmpDir, entry.Name()), data, 0600)
+				}
+			}
+		}
+		return tmpDir, cleanup, nil
+	}
+
+	return "auto", nil, nil
+}
+
 func (a *SemgrepAdapter) runCLI(ctx context.Context, binPath, repoPath string, cfg *config.Config) ([]orchestrator.Finding, error) {
 	args := []string{"scan", "--json", "--quiet", "--metrics=off"}
 
-	if cfg.Scanners.SAST.Ruleset != "" && cfg.Scanners.SAST.Ruleset != "auto" {
-		args = append(args, "--config", cfg.Scanners.SAST.Ruleset)
-	} else {
-		// Use local rules if available or auto
-		localRules := filepath.Join(repoPath, "rules")
-		if fi, err := os.Stat(localRules); err == nil && fi.IsDir() {
-			args = append(args, "--config", localRules)
-		} else {
-			args = append(args, "--config", "auto")
-		}
+	ruleTarget, cleanupRules, _ := resolveRulesConfig(repoPath, cfg)
+	if cleanupRules != nil {
+		defer cleanupRules()
+	}
+	if ruleTarget != "" {
+		args = append(args, "--config", ruleTarget)
 	}
 
 	for _, extraRule := range cfg.Scanners.SAST.ExtraRules {

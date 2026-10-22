@@ -27,9 +27,25 @@ func ValidateTarget(raw string, allowlist []string, authorized, allowPrivate boo
 		return fmt.Errorf("cannot resolve hostname %q", host)
 	}
 	for _, ip := range ips {
-		if !allowPrivate && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified()) {
+		if IsDisallowedIP(ip, allowPrivate) {
 			return fmt.Errorf("%q resolves to non-public/internal address %s (disallowed unless scanners.dast.allow_private is true)", host, ip)
 		}
 	}
 	return nil
 }
+
+// IsDisallowedIP tests if an IP is private, loopback, link-local, unspecified, or cloud metadata.
+func IsDisallowedIP(ip net.IP, allowPrivate bool) bool {
+	if allowPrivate {
+		return false
+	}
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+		return true
+	}
+	// AWS, GCP, Azure, DigitalOcean instance metadata service IP
+	if ip.String() == "169.254.169.254" {
+		return true
+	}
+	return false
+}
+

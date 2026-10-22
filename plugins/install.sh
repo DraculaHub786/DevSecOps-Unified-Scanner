@@ -77,4 +77,22 @@ fetch_and_verify "$TRIVY_URL" "$TMP_DIR/$TRIVY_FILE" "$TRIVY_FILE"
 tar -xzf "$TMP_DIR/$TRIVY_FILE" -C "$PLUGIN_DIR" trivy
 chmod +x "$PLUGIN_DIR/trivy"
 
+# 4. Nuclei
+NUCLEI_FILE="nuclei_${NUCLEI_VERSION}_linux_${ARCH}.zip"
+NUCLEI_URL="https://github.com/projectdiscovery/nuclei/releases/download/v${NUCLEI_VERSION}/${NUCLEI_FILE}"
+if curl -fsSL -I "$NUCLEI_URL" >/dev/null 2>&1; then
+    fetch_and_verify "$NUCLEI_URL" "$TMP_DIR/$NUCLEI_FILE" "$NUCLEI_FILE"
+    unzip -qo "$TMP_DIR/$NUCLEI_FILE" -d "$PLUGIN_DIR" nuclei || true
+    chmod +x "$PLUGIN_DIR/nuclei" 2>/dev/null || true
+fi
+
+# 5. Semgrep (via pipx or pip3 if present)
+if command -v pipx >/dev/null 2>&1; then
+    echo "📦 Installing pinned Semgrep via pipx..."
+    pipx install --force "semgrep==${SEMGREP_VERSION}" || true
+elif command -v pip3 >/dev/null 2>&1; then
+    pip3 install --quiet "semgrep==${SEMGREP_VERSION}" || true
+fi
+
 echo "🎉 All scanner binaries successfully installed and checksum-verified in $PLUGIN_DIR"
+

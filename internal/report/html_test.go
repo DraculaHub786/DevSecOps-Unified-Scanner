@@ -72,4 +72,17 @@ func TestGenerateHTML(t *testing.T) {
 	if strings.Contains(htmlContent, "http://") || strings.Contains(htmlContent, "https://") {
 		t.Error("HTML output should be 100% offline self-contained without external links")
 	}
+
+	// Test with warnings
+	result.Warnings = []string{"osv: embedded advisory list has 7 entries; install osv-scanner for full coverage"}
+	htmlWithWarn := GenerateHTML(result, "high")
+	if !strings.Contains(htmlWithWarn, "Scan Warnings") || !strings.Contains(htmlWithWarn, "embedded advisory list has 7 entries") {
+		t.Errorf("Expected scan warning banner in HTML report")
+	}
+
+	mdWithWarn := GenerateMarkdown(result, "high")
+	if !strings.Contains(mdWithWarn, "### ⚠️ Warnings") || !strings.Contains(mdWithWarn, "embedded advisory list has 7 entries") {
+		t.Errorf("Expected scan warning section in Markdown report")
+	}
 }
+

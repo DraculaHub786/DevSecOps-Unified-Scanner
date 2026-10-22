@@ -3,7 +3,9 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -82,15 +84,20 @@ func (s *Scheduler) Execute(ctx context.Context, cfg *config.Config, opts ScanOp
 	if err != nil {
 		return nil, fmt.Errorf("discovery phase failed: %w", err)
 	}
+	if opts.TargetURL != "" {
+		discovery.TargetURL = opts.TargetURL
+	} else if cfg != nil && cfg.Scanners.DAST.Target != "" {
+		discovery.TargetURL = cfg.Scanners.DAST.Target
+	}
 
 	// 2. Plan: filter applicable adapters
 	categoryFilter := make(map[string]bool)
 	for _, c := range opts.OnlyCategories {
-		categoryFilter[c] = true
+		categoryFilter[normalizeCategory(c)] = true
 	}
 	skipFilter := make(map[string]bool)
 	for _, s := range opts.SkipCategories {
-		skipFilter[s] = true
+		skipFilter[normalizeCategory(s)] = true
 	}
 
 	var applicable []ScannerRunner
@@ -142,10 +149,28 @@ func (s *Scheduler) Execute(ctx context.Context, cfg *config.Config, opts ScanOp
 
 			// Record engine provenance
 			engine := EngineExternal
-			for _, f := range res {
-				if f.Engine == EngineEmbedded {
-					engine = EngineEmbedded
-					break
+			if cfg.Engine == "embedded" {
+				engine = EngineEmbedded
+			} else if len(res) > 0 {
+				for _, f := range res {
+					if f.Engine == EngineEmbedded {
+						engine = EngineEmbedded
+						break
+					}
+				}
+			} else {
+				// No findings returned: determine mode by binary availability
+				binMap := map[string]string{
+					"semgrep":  "semgrep",
+					"gitleaks": "gitleaks",
+					"osv":      "osv-scanner",
+					"trivy":    "trivy",
+					"nuclei":   "nuclei",
+				}
+				if bin, ok := binMap[ad.Name()]; ok {
+					if _, err := exec.LookPath(bin); err != nil {
+						engine = EngineEmbedded
+					}
 				}
 			}
 			enginesUsed[ad.Name()] = engine
@@ -155,6 +180,11 @@ func (s *Scheduler) Execute(ctx context.Context, cfg *config.Config, opts ScanOp
 	}
 
 	wg.Wait()
+
+	// Append warning for OSV lite mode (WO-07)
+	if enginesUsed["osv"] == EngineEmbedded {
+		warnings = append(warnings, "osv: embedded advisory list has 7 entries; install osv-scanner for full coverage")
+	}
 
 	// Determine overall mode
 	overallMode := "full"
@@ -175,8 +205,19 @@ func (s *Scheduler) Execute(ctx context.Context, cfg *config.Config, opts ScanOp
 
 	// 5. Score & Generate Remediation
 	summary := SeveritySummary{}
+	entryPointMap := make(map[string]bool)
+	if discovery != nil {
+		for _, ep := range discovery.EntryPoints {
+			entryPointMap[ep] = true
+		}
+	}
+
 	for i := range deduped {
 		f := &deduped[i]
+		if f.Exposed == nil {
+			isExposed := entryPointMap[f.File]
+			f.Exposed = &isExposed
+		}
 		f.RiskScore = CalculateRiskScore(f)
 		if f.FixSuggestion == nil {
 			f.FixSuggestion = GenerateRemediation(opts.RepoPath, f)
@@ -224,3 +265,16 @@ func (s *Scheduler) Execute(ctx context.Context, cfg *config.Config, opts ScanOp
 		Summary:    summary,
 	}, nil
 }
+
+func normalizeCategory(c string) string {
+	clean := strings.ToLower(strings.TrimSpace(c))
+	switch clean {
+	case "secrets":
+		return CategorySecret
+	case "deps":
+		return CategorySCA
+	default:
+		return clean
+	}
+}
+

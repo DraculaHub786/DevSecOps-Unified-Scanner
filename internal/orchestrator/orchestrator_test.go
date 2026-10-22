@@ -1,9 +1,14 @@
 package orchestrator
 
 import (
+	"context"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/config"
 )
+
 
 func TestCorrelateAndDeduplicate(t *testing.T) {
 	reachableTrue := true
@@ -110,4 +115,159 @@ func TestDiscoveryMultiLanguageAndFixtureScan(t *testing.T) {
 		t.Errorf("Expected at least 2 IaC files (Dockerfile, infra.tf), got: %v", discovery.IaCFiles)
 	}
 }
+
+type panickingAdapter struct{}
+
+func (p *panickingAdapter) Name() string                                   { return "panic-bot" }
+func (p *panickingAdapter) Category() string                               { return "sast" }
+func (p *panickingAdapter) IsApplicable(d *DiscoveryResult) bool          { return true }
+func (p *panickingAdapter) Run(ctx context.Context, repoPath string, cfg *config.Config, d *DiscoveryResult) ([]Finding, error) {
+	panic("unexpected fatal crash inside adapter")
+}
+
+type healthyAdapter struct{}
+
+func (h *healthyAdapter) Name() string                          { return "healthy-bot" }
+func (h *healthyAdapter) Category() string                      { return "secrets" }
+func (h *healthyAdapter) IsApplicable(d *DiscoveryResult) bool { return true }
+func (h *healthyAdapter) Run(ctx context.Context, repoPath string, cfg *config.Config, d *DiscoveryResult) ([]Finding, error) {
+	return []Finding{
+		{
+			ID:          "HEALTHY-1",
+			Source:      "healthy-bot",
+			Category:    CategorySecret,
+			Severity:    SeverityMedium,
+			File:        "config.json",
+			LineStart:   5,
+			Fingerprint: "fp-healthy-1",
+		},
+	}, nil
+}
+
+func TestSchedulerPanicRecovery(t *testing.T) {
+	scheduler := NewScheduler(&panickingAdapter{}, &healthyAdapter{})
+	cfg := config.DefaultConfig()
+	opts := ScanOptions{
+		RepoPath: t.TempDir(),
+	}
+
+	result, err := scheduler.Execute(context.Background(), cfg, opts)
+	if err != nil {
+		t.Fatalf("Scheduler Execute should not fail when an adapter panics: %v", err)
+	}
+
+	if len(result.Findings) != 1 {
+		t.Fatalf("Expected 1 finding from healthy adapter, got %d", len(result.Findings))
+	}
+	if result.Findings[0].ID != "HEALTHY-1" {
+		t.Errorf("Expected finding HEALTHY-1, got %s", result.Findings[0].ID)
+	}
+
+	// Verify panic was converted to a warning
+	foundPanicWarning := false
+	for _, w := range result.Warnings {
+		if strings.Contains(w, "panic-bot panicked") {
+			foundPanicWarning = true
+			break
+		}
+	}
+	if !foundPanicWarning {
+		t.Errorf("Expected warning about panic-bot panic, got warnings: %v", result.Warnings)
+	}
+}
+
+type orderingAdapter struct{}
+
+func (o *orderingAdapter) Name() string                          { return "order-bot" }
+func (o *orderingAdapter) Category() string                      { return "sast" }
+func (o *orderingAdapter) IsApplicable(d *DiscoveryResult) bool { return true }
+func (o *orderingAdapter) Run(ctx context.Context, repoPath string, cfg *config.Config, d *DiscoveryResult) ([]Finding, error) {
+	return []Finding{
+		{ID: "f-low", Severity: SeverityLow, File: "b.go", LineStart: 10, Fingerprint: "fp-l"},
+		{ID: "f-crit-2", Severity: SeverityCritical, File: "z.go", LineStart: 5, Fingerprint: "fp-c2"},
+		{ID: "f-crit-1", Severity: SeverityCritical, File: "a.go", LineStart: 12, Fingerprint: "fp-c1"},
+		{ID: "f-crit-3", Severity: SeverityCritical, File: "a.go", LineStart: 25, Fingerprint: "fp-c3"},
+		{ID: "f-high", Severity: SeverityHigh, File: "c.go", LineStart: 1, Fingerprint: "fp-h"},
+	}, nil
+}
+
+func TestSchedulerStableOrdering(t *testing.T) {
+	scheduler := NewScheduler(&orderingAdapter{})
+	cfg := config.DefaultConfig()
+	opts := ScanOptions{
+		RepoPath: t.TempDir(),
+	}
+
+	result, err := scheduler.Execute(context.Background(), cfg, opts)
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+
+	if len(result.Findings) != 5 {
+		t.Fatalf("Expected 5 findings, got %d", len(result.Findings))
+	}
+
+	// Severity descending: Critical (a.go:12, a.go:25, z.go:5), High (c.go:1), Low (b.go:10)
+	expectedIDs := []string{"f-crit-1", "f-crit-3", "f-crit-2", "f-high", "f-low"}
+	for i, expID := range expectedIDs {
+		if result.Findings[i].ID != expID {
+			t.Errorf("At index %d: expected %s, got %s (Severity: %s, File: %s, Line: %d)",
+				i, expID, result.Findings[i].ID, result.Findings[i].Severity, result.Findings[i].File, result.Findings[i].LineStart)
+		}
+	}
+}
+
+type mockOSVEmbeddedAdapter struct{}
+
+func (m *mockOSVEmbeddedAdapter) Name() string                          { return "osv" }
+func (m *mockOSVEmbeddedAdapter) Category() string                      { return "sca" }
+func (m *mockOSVEmbeddedAdapter) IsApplicable(d *DiscoveryResult) bool { return true }
+func (m *mockOSVEmbeddedAdapter) Run(ctx context.Context, repoPath string, cfg *config.Config, d *DiscoveryResult) ([]Finding, error) {
+	return []Finding{
+		{
+			ID:          "OSV-LITE-1",
+			Source:      "osv",
+			Engine:      EngineEmbedded,
+			Category:    CategorySCA,
+			Severity:    SeverityHigh,
+			File:        "package.json",
+			LineStart:   1,
+			Fingerprint: "fp-osv-lite",
+		},
+	}, nil
+}
+
+func TestSchedulerOSVLiteWarningAndEngineDetermination(t *testing.T) {
+	scheduler := NewScheduler(&mockOSVEmbeddedAdapter{})
+	cfg := config.DefaultConfig()
+	opts := ScanOptions{
+		RepoPath: t.TempDir(),
+	}
+
+	result, err := scheduler.Execute(context.Background(), cfg, opts)
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+
+	if result.Engines["osv"] != EngineEmbedded {
+		t.Errorf("expected engine for osv to be %q, got %q", EngineEmbedded, result.Engines["osv"])
+	}
+
+	if result.Mode != "lite" {
+		t.Errorf("expected overall mode to be 'lite', got %q", result.Mode)
+	}
+
+	foundOSVWarning := false
+	for _, w := range result.Warnings {
+		if strings.Contains(w, "osv: embedded advisory list has 7 entries; install osv-scanner for full coverage") {
+			foundOSVWarning = true
+			break
+		}
+	}
+	if !foundOSVWarning {
+		t.Errorf("expected warning about OSV embedded advisory count, got: %v", result.Warnings)
+	}
+}
+
+
 

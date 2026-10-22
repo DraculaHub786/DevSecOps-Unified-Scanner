@@ -59,6 +59,14 @@ func RenderTerminal(w io.Writer, result *orchestrator.ScanResult, failOn string)
 		result.Summary.Info,
 	)
 
+	if len(result.Warnings) > 0 {
+		fmt.Fprintf(w, "%s⚠️ Warnings:%s\n", colorYellow, colorReset)
+		for _, warn := range result.Warnings {
+			fmt.Fprintf(w, "  • %s%s%s\n", colorYellow, warn, colorReset)
+		}
+		fmt.Fprintln(w)
+	}
+
 	if len(result.Findings) == 0 {
 		fmt.Fprintf(w, "%s%s✨ No security flaws or secrets identified. Repository is clean!%s\n\n", colorBold, colorGreen, colorReset)
 		return

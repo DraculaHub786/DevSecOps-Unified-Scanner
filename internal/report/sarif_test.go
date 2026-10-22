@@ -20,10 +20,12 @@ func TestGenerateSARIF(t *testing.T) {
 			File:        "config.go",
 			LineStart:   15,
 			LineEnd:     15,
+			Fingerprint: "fp-test-123",
 			Message:     "Hardcoded AWS key identified",
 			FirstSeen:   time.Now(),
 		},
 	}
+
 
 	data, err := GenerateSARIF(findings)
 	if err != nil {
@@ -45,8 +47,16 @@ func TestGenerateSARIF(t *testing.T) {
 		t.Fatalf("expected 1 result in run, got %d", len(parsed.Runs[0].Results))
 	}
 
+	if parsed.Runs[0].Tool.Driver.Version != "0.1.1" {
+		t.Errorf("expected tool driver version '0.1.1', got '%s'", parsed.Runs[0].Tool.Driver.Version)
+	}
+
 	res := parsed.Runs[0].Results[0]
 	if res.Level != "error" {
 		t.Errorf("expected level 'error' for critical severity, got '%s'", res.Level)
 	}
+	if res.PartialFingerprints["primaryLocationLineHash"] == "" {
+		t.Errorf("expected primaryLocationLineHash in partialFingerprints")
+	}
 }
+

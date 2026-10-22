@@ -318,6 +318,141 @@ func (a *OSVAdapter) runNativeFallback(repoPath string, cfg *config.Config, disc
 		content := string(contentBytes)
 		lines := strings.Split(content, "\n")
 
+		// Basic supply-chain checks: unpinned versions and typosquatting
+		var knownTyposquats = map[string]string{
+			"lodas-h":  "lodash",
+			"lodashs":  "lodash",
+			"requsts":  "requests",
+			"reqeusts": "requests",
+			"expresss": "express",
+			"crossenv": "cross-env",
+			"collor":   "colors",
+		}
+
+		depRegex := regexp.MustCompile(`"([^"]+)"\s*:\s*"([^"]+)"`)
+		if base == "package.json" {
+			for idx, line := range lines {
+				if m := depRegex.FindStringSubmatch(line); len(m) > 2 {
+					pkgName := strings.TrimSpace(m[1])
+					ver := strings.TrimSpace(m[2])
+					if pkgName == "dependencies" || pkgName == "devDependencies" || pkgName == "name" || pkgName == "version" || pkgName == "scripts" {
+						continue
+					}
+
+					// Typosquatting check
+					if target, isTyposquat := knownTyposquats[strings.ToLower(pkgName)]; isTyposquat {
+						fID := orchestrator.GenerateID("osv", "SUPPLY-CHAIN-TYPOSQUAT", manifest, idx+1)
+						if !cfg.ShouldIgnoreFinding(fID) {
+							f := orchestrator.Finding{
+								ID:          fID,
+								Source:      "osv",
+								Engine:      orchestrator.EngineEmbedded,
+								Category:    orchestrator.CategorySCA,
+								Rule:        "SUPPLY-CHAIN-TYPOSQUAT",
+								Severity:    orchestrator.SeverityHigh,
+								CWE:         "CWE-1357",
+								File:        manifest,
+								LineStart:   idx + 1,
+								LineEnd:     idx + 1,
+								Message:     fmt.Sprintf("Dependency %q closely resembles popular package %q (potential typosquatting supply-chain attack)", pkgName, target),
+								FirstSeen:   time.Now().UTC(),
+								Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategorySCA, "SUPPLY-CHAIN-TYPOSQUAT", manifest, pkgName),
+							}
+							f.RiskScore = orchestrator.CalculateRiskScore(&f)
+							findings = append(findings, f)
+						}
+					}
+
+					// Unpinned check
+					if ver == "*" || ver == "latest" || strings.HasPrefix(ver, ">") {
+						fID := orchestrator.GenerateID("osv", "SUPPLY-CHAIN-UNPINNED", manifest, idx+1)
+						if !cfg.ShouldIgnoreFinding(fID) {
+							f := orchestrator.Finding{
+								ID:          fID,
+								Source:      "osv",
+								Engine:      orchestrator.EngineEmbedded,
+								Category:    orchestrator.CategorySCA,
+								Rule:        "SUPPLY-CHAIN-UNPINNED",
+								Severity:    orchestrator.SeverityMedium,
+								CWE:         "CWE-1104",
+								File:        manifest,
+								LineStart:   idx + 1,
+								LineEnd:     idx + 1,
+								Message:     fmt.Sprintf("Dependency %q uses unpinned or wildcard version %q; pin to an exact or bounded semver range", pkgName, ver),
+								FirstSeen:   time.Now().UTC(),
+								Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategorySCA, "SUPPLY-CHAIN-UNPINNED", manifest, pkgName),
+							}
+							f.RiskScore = orchestrator.CalculateRiskScore(&f)
+							findings = append(findings, f)
+						}
+					}
+				}
+			}
+		} else if base == "requirements.txt" {
+			reqLineRegex := regexp.MustCompile(`^\s*([a-zA-Z0-9_\-\.]+)\s*([^\s#]*)`)
+			for idx, line := range lines {
+				trimmed := strings.TrimSpace(line)
+				if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+					continue
+				}
+				if m := reqLineRegex.FindStringSubmatch(trimmed); len(m) > 1 {
+					pkgName := m[1]
+					spec := ""
+					if len(m) > 2 {
+						spec = m[2]
+					}
+
+					// Typosquatting check
+					if target, isTyposquat := knownTyposquats[strings.ToLower(pkgName)]; isTyposquat {
+						fID := orchestrator.GenerateID("osv", "SUPPLY-CHAIN-TYPOSQUAT", manifest, idx+1)
+						if !cfg.ShouldIgnoreFinding(fID) {
+							f := orchestrator.Finding{
+								ID:          fID,
+								Source:      "osv",
+								Engine:      orchestrator.EngineEmbedded,
+								Category:    orchestrator.CategorySCA,
+								Rule:        "SUPPLY-CHAIN-TYPOSQUAT",
+								Severity:    orchestrator.SeverityHigh,
+								CWE:         "CWE-1357",
+								File:        manifest,
+								LineStart:   idx + 1,
+								LineEnd:     idx + 1,
+								Message:     fmt.Sprintf("Python package %q closely resembles popular package %q (potential typosquatting supply-chain attack)", pkgName, target),
+								FirstSeen:   time.Now().UTC(),
+								Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategorySCA, "SUPPLY-CHAIN-TYPOSQUAT", manifest, pkgName),
+							}
+							f.RiskScore = orchestrator.CalculateRiskScore(&f)
+							findings = append(findings, f)
+						}
+					}
+
+					// Unpinned check
+					if spec == "" || !strings.Contains(spec, "==") {
+						fID := orchestrator.GenerateID("osv", "SUPPLY-CHAIN-UNPINNED", manifest, idx+1)
+						if !cfg.ShouldIgnoreFinding(fID) {
+							f := orchestrator.Finding{
+								ID:          fID,
+								Source:      "osv",
+								Engine:      orchestrator.EngineEmbedded,
+								Category:    orchestrator.CategorySCA,
+								Rule:        "SUPPLY-CHAIN-UNPINNED",
+								Severity:    orchestrator.SeverityMedium,
+								CWE:         "CWE-1104",
+								File:        manifest,
+								LineStart:   idx + 1,
+								LineEnd:     idx + 1,
+								Message:     fmt.Sprintf("Python package %q is unpinned (%q); pin to an exact version using ==", pkgName, trimmed),
+								FirstSeen:   time.Now().UTC(),
+								Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategorySCA, "SUPPLY-CHAIN-UNPINNED", manifest, pkgName),
+							}
+							f.RiskScore = orchestrator.CalculateRiskScore(&f)
+							findings = append(findings, f)
+						}
+					}
+				}
+			}
+		}
+
 		for _, dbEntry := range vulnDB {
 			switch base {
 			case "package.json":

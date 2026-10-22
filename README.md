@@ -32,6 +32,38 @@ A unified local-first DevSecOps security scanner orchestrating industry-standard
 
 ---
 
+## 🛡️ Operational Modes (Full vs. Lite)
+
+Sentinel is architected around transparent engine provenance: **Production security tools are the product; embedded fallbacks are a clearly labeled "lite mode".**
+
+| Feature | Full Mode (Recommended) | Embedded Lite Mode |
+| :--- | :--- | :--- |
+| **Engine Used** | External CLI (`semgrep`, `gitleaks`, `osv-scanner`, `trivy`, `nuclei`) | Built-in zero-dependency regex and heuristic rule checkers |
+| **Finding Tag** | `engine: external` | `engine: embedded` (labeled as `lite` in terminal) |
+| **Rule Breadth** | Comprehensive community and vendor rule catalogs | Focused subset of common CVEs and security signatures |
+| **CI Behavior** | Standard CI gating | Fails CI (`exit 2`) unless `--allow-lite` is passed |
+
+Check your workstation or runner engine status at any time:
+```bash
+sentinel doctor
+```
+
+---
+
+## ⚖️ Authorized Use & DAST Safety Guardrails
+
+> [!CAUTION]
+> Dynamic Application Security Testing (DAST) interacts directly with networked HTTP services. You must only scan services and hosts that you own or have explicit, prior written authorization to assess.
+
+Sentinel enforces strict guardrails before any network request is issued:
+1. **Mandatory Authorization Flag**: You must pass `--i-have-authorization`.
+2. **Explicit Hostname Allowlist**: Targets must be declared in `.sentinel.yml` under `scanners.dast.allowlist`.
+3. **Private Subnet & Cloud Metadata Guard**: Sentinel validates DNS responses and checks the connected socket IP, blocking loopback (`127.0.0.1`), private RFC1918 subnets (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), and cloud metadata (`169.254.169.254`) unless `allow_private: true` is explicitly configured.
+4. **Passive Only**: Nuclei tests run with `-passive` to avoid denial-of-service or active payload disruption.
+
+---
+
+
 ## 🛠️ Command Reference
 
 | Command | Purpose |

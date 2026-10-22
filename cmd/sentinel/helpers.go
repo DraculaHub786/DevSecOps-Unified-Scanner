@@ -25,12 +25,16 @@ import (
 
 func newExplainCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "explain <finding-id>",
+		Use:   "explain <finding-id> [path]",
 		Short: "Print rule rationale, CWE link, and remediation guidance for a finding",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.RangeArgs(1, 2),
 		Run: func(cmd *cobra.Command, args []string) {
 			findingID := args[0]
-			repoPath, _ := filepath.Abs(".")
+			targetPath := "."
+			if len(args) > 1 {
+				targetPath = args[1]
+			}
+			repoPath, _ := filepath.Abs(targetPath)
 
 			cfg, _ := config.Load(repoPath)
 			scheduler := orchestrator.NewScheduler(
@@ -58,7 +62,7 @@ func newExplainCmd() *cobra.Command {
 			}
 
 			if matched == nil {
-				fmt.Fprintf(os.Stderr, "Finding ID %s not found in current workspace scan.\n", findingID)
+				fmt.Fprintf(os.Stderr, "Finding ID %s not found in scan of %s.\n", findingID, repoPath)
 				os.Exit(1)
 			}
 
@@ -97,12 +101,16 @@ func newFixCmd() *cobra.Command {
 	var apply bool
 
 	cmd := &cobra.Command{
-		Use:   "fix <finding-id>",
+		Use:   "fix <finding-id> [path]",
 		Short: "Preview or apply automated remediation fix for a finding",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.RangeArgs(1, 2),
 		Run: func(cmd *cobra.Command, args []string) {
 			findingID := args[0]
-			repoPath, _ := filepath.Abs(".")
+			targetPath := "."
+			if len(args) > 1 {
+				targetPath = args[1]
+			}
+			repoPath, _ := filepath.Abs(targetPath)
 
 			cfg, _ := config.Load(repoPath)
 			scheduler := orchestrator.NewScheduler(
@@ -245,7 +253,7 @@ func newInstallHooksCmd() *cobra.Command {
 			hookContent := `#!/bin/sh
 # Sentinel DevSecOps Pre-Commit Guard
 echo "🛡️ Running Sentinel pre-commit security verification..."
-sentinel scan --fail-on=high
+sentinel scan --fail-on=high --ci
 EXIT_CODE=$?
 if [ $EXIT_CODE -ne 0 ]; then
   echo "❌ Sentinel blocked commit due to high/critical security findings."

@@ -1,7 +1,9 @@
 package semgrep
 
 import (
+	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -43,3 +45,55 @@ func TestParseSemgrepGolden(t *testing.T) {
 		t.Errorf("Expected line 42, got %d", f.LineStart)
 	}
 }
+
+func TestSemgrepStderrNoiseWithValidJSON(t *testing.T) {
+	goldenPath := filepath.Join("..", "..", "..", "testdata", "golden", "semgrep.json")
+	goldenData, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatalf("Failed to read golden file: %v", err)
+	}
+
+	tmpDir := t.TempDir()
+	fakeSrc := filepath.Join(tmpDir, "fake_semgrep.go")
+	jsonStr := string(goldenData)
+
+	// Write small helper program that prints warnings to stderr and golden JSON to stdout
+	code := `package main
+import (
+	"fmt"
+	"os"
+)
+func main() {
+	fmt.Fprintln(os.Stderr, "WARNING: rule semgrep-rule-001 has been deprecated")
+	fmt.Fprintln(os.Stderr, "WARNING: skipping .git directory")
+	fmt.Print(` + "`" + jsonStr + "`" + `)
+	os.Exit(0)
+}
+`
+	if err := os.WriteFile(fakeSrc, []byte(code), 0644); err != nil {
+		t.Fatalf("Failed to write fake semgrep source: %v", err)
+	}
+
+	fakeBin := filepath.Join(tmpDir, "fake_semgrep.exe")
+	buildCmd := exec.Command("go", "build", "-o", fakeBin, fakeSrc)
+	if out, err := buildCmd.CombinedOutput(); err != nil {
+		t.Fatalf("Failed to compile fake semgrep helper: %v (output: %s)", err, string(out))
+	}
+
+	adapter := New()
+	cfg := config.DefaultConfig()
+
+	findings, err := adapter.runCLI(context.Background(), fakeBin, tmpDir, cfg)
+	if err != nil {
+		t.Fatalf("runCLI failed despite valid JSON on stdout: %v", err)
+	}
+
+	if len(findings) != 1 {
+		t.Fatalf("Expected 1 finding from fake semgrep run, got %d", len(findings))
+	}
+
+	if findings[0].Engine != orchestrator.EngineExternal {
+		t.Errorf("Expected engine %s, got %s", orchestrator.EngineExternal, findings[0].Engine)
+	}
+}
+

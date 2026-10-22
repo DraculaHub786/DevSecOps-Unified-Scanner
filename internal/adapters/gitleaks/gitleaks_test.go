@@ -47,3 +47,36 @@ func TestParseGitleaksGolden(t *testing.T) {
 		t.Errorf("Expected message to contain 'AWS Access Key', got %s", f.Message)
 	}
 }
+
+func TestGitleaksCleanRepoZeroFindings(t *testing.T) {
+	cfg := config.DefaultConfig()
+	// Empty data means clean exit with 0 findings
+	findings, err := ParseReport([]byte("[]"), ".", cfg)
+	if err != nil {
+		t.Fatalf("ParseReport failed on clean report: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Errorf("Expected 0 findings on clean report, got %d", len(findings))
+	}
+}
+
+func TestRedactSecret(t *testing.T) {
+	shortSecret := "abcdef"
+	redactedShort := redactSecret(shortSecret)
+	if !strings.HasPrefix(redactedShort, "sha256:") {
+		t.Errorf("Expected 'sha256:...' for short secret, got %q", redactedShort)
+	}
+
+	longSecret := "ghp_1234567890abcdefghijklmnopqrstuvwxyz"
+	redactedLong := redactSecret(longSecret)
+	if !strings.HasPrefix(redactedLong, "ghp") {
+		t.Errorf("Expected prefix 'ghp', got %q", redactedLong)
+	}
+	if !strings.HasSuffix(redactedLong, "xyz") {
+		t.Errorf("Expected suffix 'xyz', got %q", redactedLong)
+	}
+	if strings.Contains(redactedLong, "1234567890abcdef") {
+		t.Errorf("Secret middle must be redacted, but was exposed: %q", redactedLong)
+	}
+}
+

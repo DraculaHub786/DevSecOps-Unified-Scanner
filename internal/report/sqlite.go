@@ -45,14 +45,8 @@ func NewSQLiteStore(repoPath string) (*SQLiteStore, error) {
 	return &SQLiteStore{dbPath: dbPath}, nil
 }
 
-// RecordScan records the scan metadata and its findings into SQLite with schema migrations.
-func (s *SQLiteStore) RecordScan(result *orchestrator.ScanResult, commitSHA string) error {
-	db, err := sql.Open("sqlite", s.dbPath)
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-
+// initDB creates all tables and runs schema migrations if not yet present.
+func (s *SQLiteStore) initDB(db *sql.DB) error {
 	schema := `
 	CREATE TABLE IF NOT EXISTS scans (
 	  id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -73,9 +67,14 @@ func (s *SQLiteStore) RecordScan(result *orchestrator.ScanResult, commitSHA stri
 	  file TEXT,
 	  line_start INTEGER,
 	  risk_score REAL,
-	  status TEXT DEFAULT 'open',
-	  PRIMARY KEY(scan_id, id),
 	  FOREIGN KEY(scan_id) REFERENCES scans(id)
+	);
+	CREATE TABLE IF NOT EXISTS baselines (
+	  id INTEGER PRIMARY KEY AUTOINCREMENT,
+	  created_at TIMESTAMP,
+	  fingerprint TEXT UNIQUE,
+	  rule TEXT,
+	  file TEXT
 	);
 	`
 	if _, err := db.Exec(schema); err != nil {
@@ -85,6 +84,21 @@ func (s *SQLiteStore) RecordScan(result *orchestrator.ScanResult, commitSHA stri
 	// Schema migration for old history.db tables
 	_, _ = db.Exec("ALTER TABLE findings ADD COLUMN engine TEXT DEFAULT 'embedded'")
 	_, _ = db.Exec("ALTER TABLE findings ADD COLUMN status TEXT DEFAULT 'open'")
+	return nil
+}
+
+// RecordScan records the scan metadata and its findings into SQLite with schema migrations.
+func (s *SQLiteStore) RecordScan(result *orchestrator.ScanResult, commitSHA string) error {
+	db, err := sql.Open("sqlite", s.dbPath)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	if err := s.initDB(db); err != nil {
+		return err
+	}
+
 
 	tx, err := db.Begin()
 	if err != nil {
@@ -213,3 +227,66 @@ func (s *SQLiteStore) CompareScans(scanA, scanB int64) (*DiffResult, error) {
 
 	return diff, nil
 }
+
+// SaveBaseline stores baseline fingerprints into the SQLite database.
+func (s *SQLiteStore) SaveBaseline(fingerprints []string) error {
+	db, err := sql.Open("sqlite", s.dbPath)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	if err := s.initDB(db); err != nil {
+		return err
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO baselines (created_at, fingerprint) VALUES (?, ?)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	for _, fp := range fingerprints {
+		if _, err := stmt.Exec(now, fp); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// GetBaseline retrieves all baseline fingerprints from the SQLite database.
+func (s *SQLiteStore) GetBaseline() ([]string, error) {
+	db, err := sql.Open("sqlite", s.dbPath)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+
+	if err := s.initDB(db); err != nil {
+		return nil, err
+	}
+
+	rows, err := db.Query(`SELECT DISTINCT fingerprint FROM baselines`)
+
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var fps []string
+	for rows.Next() {
+		var fp string
+		if err := rows.Scan(&fp); err == nil && fp != "" {
+			fps = append(fps, fp)
+		}
+	}
+	return fps, nil
+}
+

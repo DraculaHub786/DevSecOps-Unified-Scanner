@@ -27,13 +27,36 @@ jobs:
       - name: Build Sentinel Binary
         run: go build -o bin/sentinel ./cmd/sentinel
 
+      - name: SARIF Output and Schema Check
+        run: |
+          ./bin/sentinel scan testdata/vulnerable-app --format sarif --out /tmp/test.sarif
+          grep '"version": "2.1.0"' /tmp/test.sarif
+          grep 'sarif-schema-2.1.0.json' /tmp/test.sarif
+
       - name: Egress Test (Zero Network Verification)
         run: |
           sudo unshare -n ./bin/sentinel scan testdata/vulnerable-app --offline --format json --out /tmp/egress_report.json
           test -s /tmp/egress_report.json
 
+  cross-compile:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [linux, darwin, windows]
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Cross-compile Sentinel (${{ matrix.goos }}/${{ matrix.goarch }})
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: go build -v -o /dev/null ./cmd/sentinel
+
   self-scan:
-    needs: test
+    needs: [test, cross-compile]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -59,3 +82,4 @@ jobs:
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: results.sarif
+

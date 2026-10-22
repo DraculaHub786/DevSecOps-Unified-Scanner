@@ -36,6 +36,8 @@ func newDASTCmd() *cobra.Command {
 			if err != nil {
 				cfg = config.DefaultConfig()
 			}
+			cfg.Scanners.DAST.Target = targetURL
+			cfg.Scanners.DAST.Enabled = true
 
 			// Enforce legal and network safety boundaries
 			if err := safety.ValidateTarget(targetURL, cfg.Scanners.DAST.Allowlist, authorized, cfg.Scanners.DAST.AllowPrivate); err != nil {
@@ -44,7 +46,7 @@ func newDASTCmd() *cobra.Command {
 			}
 
 			fmt.Printf("🌐 Starting DAST scan against target: %s\n", targetURL)
-			adapter := nuclei.New()
+			adapter := nuclei.NewWithAuth(authorized)
 
 			ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 			defer cancel()

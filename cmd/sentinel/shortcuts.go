@@ -21,7 +21,11 @@ func newIaCCmd() *cobra.Command {
 }
 
 func createCategoryShortcutCmd(use, short, category string) *cobra.Command {
-	var failOn string
+	var (
+		failOn     string
+		configPath string
+		offline    bool
+	)
 
 	cmd := &cobra.Command{
 		Use:   use + " [path]",
@@ -32,10 +36,12 @@ func createCategoryShortcutCmd(use, short, category string) *cobra.Command {
 			if len(args) > 0 {
 				path = args[0]
 			}
-			runScanInternal(path, []string{category}, nil, false, nil, failOn, "terminal", "", false, false, false, "")
+			runScanInternal(path, configPath, []string{category}, nil, false, nil, failOn, "terminal", "", false, false, false, "", offline, false)
 		},
 	}
 
 	cmd.Flags().StringVar(&failOn, "fail-on", "high", "Fail gating threshold: critical|high|medium|low")
+	cmd.Flags().StringVar(&configPath, "config", "", "Explicit path to .sentinel.yml policy file")
+	cmd.Flags().BoolVar(&offline, "offline", false, "Disable network requests")
 	return cmd
 }

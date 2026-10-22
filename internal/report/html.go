@@ -109,8 +109,22 @@ func GenerateHTML(result *orchestrator.ScanResult, failOn string) string {
       <div class="card-num" style="color: var(--low);">` + fmt.Sprintf("%d", result.Summary.Low) + `</div>
     </div>
   </div>
+`)
 
-  <h2>Security Findings</h2>
+	if len(result.Warnings) > 0 {
+		sb.WriteString(`  <div style="background: rgba(234, 179, 8, 0.1); border: 1px solid #eab308; border-radius: 8px; padding: 12px 16px; margin-bottom: 24px;">
+    <h3 style="margin-top: 0; margin-bottom: 8px; color: #fde047; font-size: 15px;">⚠️ Scan Warnings</h3>
+    <ul style="margin: 0; padding-left: 20px; color: #fef08a; font-size: 13px;">
+`)
+		for _, w := range result.Warnings {
+			sb.WriteString(`      <li>` + html.EscapeString(w) + `</li>` + "\n")
+		}
+		sb.WriteString(`    </ul>
+  </div>
+`)
+	}
+
+	sb.WriteString(`  <h2>Security Findings</h2>
   <table>
     <thead>
       <tr>

@@ -749,4 +749,5 @@ Change the status as you go. Allowed values: Todo, Doing, Done, Blocked.
 | 21 | CI, release, Dependabot | Done | ci |
 | 22 | Tests | Done | test |
 | 23 | README and docs | Done | docs |
-| 24 | Release v0.1.0 | Done | release |
+| 24 | Release v0.1.1 | Done | release |
+
