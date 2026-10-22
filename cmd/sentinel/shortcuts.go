@@ -36,7 +36,7 @@ func createCategoryShortcutCmd(use, short, category string) *cobra.Command {
 			if len(args) > 0 {
 				path = args[0]
 			}
-			runScanInternal(path, configPath, []string{category}, nil, false, nil, failOn, "terminal", "", false, false, false, "", offline, false)
+			runScanInternal(path, configPath, []string{category}, nil, false, nil, failOn, "terminal", "", false, false, false, "", offline, false, "", false)
 		},
 	}
 

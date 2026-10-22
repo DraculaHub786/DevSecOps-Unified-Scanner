@@ -71,4 +71,3 @@ func TestNucleiIsApplicable(t *testing.T) {
 		t.Errorf("Expected IsApplicable to be true when TargetURL is set")
 	}
 }
-

@@ -95,11 +95,13 @@ export class AgentClient {
         });
     }
 
-    async scanRun(repoPath: string, paths: string[] = [], incremental: boolean = false): Promise<string> {
+    async scanRun(repoPath: string, paths: string[] = [], incremental: boolean = false, offline: boolean = false, policyPath?: string): Promise<string> {
         const res = await this.sendRequest<{ scanId: string }>('scan.run', {
             repoPath,
             paths,
-            incremental
+            incremental,
+            offline,
+            policyPath
         });
         return res.scanId;
     }
@@ -118,5 +120,37 @@ export class AgentClient {
 
     async applyFix(repoPath: string, findingId: string): Promise<{ success: boolean; appliedDiff: string }> {
         return this.sendRequest<{ success: boolean; appliedDiff: string }>('fix.apply', { repoPath, findingId });
+    }
+
+    async ping(): Promise<{ status: string; version: string }> {
+        return this.sendRequest<{ status: string; version: string }>('agent.ping', {});
+    }
+
+    async getCoverage(): Promise<any> {
+        return this.sendRequest<any>('agent.coverage', {});
+    }
+
+    async runDoctor(): Promise<any[]> {
+        return this.sendRequest<any[]>('doctor.run', {});
+    }
+
+    async createBaseline(repoPath: string): Promise<{ success: boolean; count: number; path: string }> {
+        return this.sendRequest<{ success: boolean; count: number; path: string }>('baseline.create', { repoPath });
+    }
+
+    async addSuppression(repoPath: string, findingId: string, reason: string, expires?: string): Promise<{ success: boolean; findingId: string; file: string }> {
+        return this.sendRequest<{ success: boolean; findingId: string; file: string }>('suppress.add', { repoPath, findingId, reason, expires });
+    }
+
+    async runThreatModel(repoPath: string): Promise<any> {
+        return this.sendRequest<any>('threatmodel.run', { repoPath });
+    }
+
+    async generateSBOM(repoPath: string, format: string = 'cyclonedx', out: string = ''): Promise<any> {
+        return this.sendRequest<any>('sbom.generate', { repoPath, format, out });
+    }
+
+    async runDAST(target: string, authorized: boolean, allowPrivate: boolean = false): Promise<Finding[]> {
+        return this.sendRequest<Finding[]>('dast.run', { target, authorized, allowPrivate });
     }
 }

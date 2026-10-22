@@ -40,6 +40,8 @@ func (a *TrivyAdapter) IsApplicable(discovery *orchestrator.DiscoveryResult) boo
 type trivyOutput struct {
 	Results []struct {
 		Target            string `json:"Target"`
+		Class             string `json:"Class"`
+		Type              string `json:"Type"`
 		Misconfigurations []struct {
 			ID          string `json:"ID"`
 			Title       string `json:"Title"`
@@ -57,11 +59,28 @@ type trivyOutput struct {
 				EndLine   int `json:"EndLine"`
 			} `json:"CauseMetadata"`
 		} `json:"Misconfigurations"`
+		Vulnerabilities []struct {
+			VulnerabilityID  string   `json:"VulnerabilityID"`
+			PkgName          string   `json:"PkgName"`
+			InstalledVersion string   `json:"InstalledVersion"`
+			FixedVersion     string   `json:"FixedVersion"`
+			Title            string   `json:"Title"`
+			Description      string   `json:"Description"`
+			Severity         string   `json:"Severity"`
+			PrimaryURL       string   `json:"PrimaryURL"`
+			CweIDs           []string `json:"CweIDs"`
+		} `json:"Vulnerabilities"`
+		Licenses []struct {
+			Severity string `json:"Severity"`
+			Category string `json:"Category"`
+			PkgName  string `json:"PkgName"`
+			Name     string `json:"Name"`
+		} `json:"Licenses"`
 	} `json:"Results"`
 }
 
 func (a *TrivyAdapter) Run(ctx context.Context, repoPath string, cfg *config.Config, discovery *orchestrator.DiscoveryResult) ([]orchestrator.Finding, error) {
-	if !cfg.Scanners.IaC.Enabled {
+	if !cfg.Scanners.IaC.Enabled && !cfg.Scanners.SCA.Enabled {
 		return nil, nil
 	}
 
@@ -77,7 +96,11 @@ func (a *TrivyAdapter) Run(ctx context.Context, repoPath string, cfg *config.Con
 }
 
 func (a *TrivyAdapter) runCLI(ctx context.Context, binPath, repoPath string, cfg *config.Config) ([]orchestrator.Finding, error) {
-	toolRes, err := adapters.RunTool(ctx, binPath, "fs", "--format", "json", "--scanners", "misconfig", repoPath)
+	scanners := []string{"misconfig"}
+	if cfg.Scanners.SCA.Enabled {
+		scanners = append(scanners, "vuln", "license")
+	}
+	toolRes, err := adapters.RunTool(ctx, binPath, "fs", "--format", "json", "--scanners", strings.Join(scanners, ","), repoPath)
 	if err != nil {
 		return nil, fmt.Errorf("trivy execution failed: %w", err)
 	}
@@ -131,17 +154,7 @@ func (a *TrivyAdapter) ParseOutput(data []byte, repoPath string, cfg *config.Con
 				continue
 			}
 
-			sev := orchestrator.SeverityMedium
-			switch strings.ToUpper(mis.Severity) {
-			case "CRITICAL":
-				sev = orchestrator.SeverityCritical
-			case "HIGH":
-				sev = orchestrator.SeverityHigh
-			case "MEDIUM":
-				sev = orchestrator.SeverityMedium
-			case "LOW":
-				sev = orchestrator.SeverityLow
-			}
+			sev := mapTrivySeverity(mis.Severity)
 
 			f := orchestrator.Finding{
 				ID:          findingID,
@@ -155,6 +168,8 @@ func (a *TrivyAdapter) ParseOutput(data []byte, repoPath string, cfg *config.Con
 				LineStart:   startLine,
 				LineEnd:     endLine,
 				Message:     fmt.Sprintf("%s: %s", mis.Title, mis.Message),
+				Snippet:     mis.Title,
+				OWASP:       "A05:2021-Security Misconfiguration",
 				FirstSeen:   time.Now().UTC(),
 				Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategoryIaC, mis.ID, relFile, mis.Title),
 			}
@@ -162,9 +177,106 @@ func (a *TrivyAdapter) ParseOutput(data []byte, repoPath string, cfg *config.Con
 			f.FixSuggestion = orchestrator.GenerateRemediation(repoPath, &f)
 			findings = append(findings, f)
 		}
+
+		// Vulnerabilities (SCA second opinion engine - T-056)
+		for _, vuln := range res.Vulnerabilities {
+			findingID := orchestrator.GenerateID("trivy", vuln.VulnerabilityID, relFile, 1)
+			if cfg.ShouldIgnoreFinding(findingID) {
+				continue
+			}
+			snippet := fmt.Sprintf("%s@%s", vuln.PkgName, vuln.InstalledVersion)
+			cwe := "CWE-1395"
+			if len(vuln.CweIDs) > 0 {
+				cwe = vuln.CweIDs[0]
+			}
+			msg := vuln.Title
+			if msg == "" {
+				msg = fmt.Sprintf("Vulnerability %s in dependency %s (fixed in: %s)", vuln.VulnerabilityID, snippet, vuln.FixedVersion)
+			}
+			f := orchestrator.Finding{
+				ID:          findingID,
+				Source:      "trivy",
+				Engine:      orchestrator.EngineExternal,
+				Category:    orchestrator.CategorySCA,
+				Rule:        vuln.VulnerabilityID,
+				Severity:    mapTrivySeverity(vuln.Severity),
+				CVE:         vuln.VulnerabilityID,
+				CWE:         cwe,
+				File:        relFile,
+				LineStart:   1,
+				LineEnd:     1,
+				Message:     msg,
+				Snippet:     snippet,
+				OWASP:       "A06:2021-Vulnerable and Outdated Components",
+				FirstSeen:   time.Now().UTC(),
+				Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategorySCA, vuln.VulnerabilityID, relFile, snippet),
+			}
+			f.RiskScore = orchestrator.CalculateRiskScore(&f)
+			f.FixSuggestion = orchestrator.GenerateRemediation(repoPath, &f)
+			findings = append(findings, f)
+		}
+
+		// Licenses compliance (T-057)
+		for _, lic := range res.Licenses {
+			if isDisallowedLicense(lic.Name, cfg.Scanners.SCA.FailOnLicense) {
+				findingID := orchestrator.GenerateID("trivy", "license/"+lic.Name, relFile, 1)
+				if cfg.ShouldIgnoreFinding(findingID) {
+					continue
+				}
+				snippet := fmt.Sprintf("%s (%s)", lic.PkgName, lic.Name)
+				f := orchestrator.Finding{
+					ID:          findingID,
+					Source:      "trivy",
+					Engine:      orchestrator.EngineExternal,
+					Category:    orchestrator.CategorySCA,
+					Rule:        "license/" + lic.Name,
+					Severity:    orchestrator.SeverityHigh,
+					License:     lic.Name,
+					File:        relFile,
+					LineStart:   1,
+					LineEnd:     1,
+					Message:     fmt.Sprintf("Dependency %s uses forbidden license %q (configured in scanners.sca.fail_on_license)", lic.PkgName, lic.Name),
+					Snippet:     snippet,
+					OWASP:       "A06:2021-Vulnerable and Outdated Components",
+					FirstSeen:   time.Now().UTC(),
+					Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategorySCA, "license", relFile, snippet),
+				}
+				f.RiskScore = orchestrator.CalculateRiskScore(&f)
+				findings = append(findings, f)
+			}
+		}
 	}
 
 	return findings, nil
+}
+
+func mapTrivySeverity(sev string) string {
+	switch strings.ToUpper(sev) {
+	case "CRITICAL":
+		return orchestrator.SeverityCritical
+	case "HIGH":
+		return orchestrator.SeverityHigh
+	case "MEDIUM":
+		return orchestrator.SeverityMedium
+	case "LOW":
+		return orchestrator.SeverityLow
+	default:
+		return orchestrator.SeverityMedium
+	}
+}
+
+func isDisallowedLicense(lic string, disallowed []string) bool {
+	if lic == "" || len(disallowed) == 0 {
+		return false
+	}
+	licLower := strings.ToLower(strings.TrimSpace(lic))
+	for _, d := range disallowed {
+		dLower := strings.ToLower(strings.TrimSpace(d))
+		if dLower != "" && (licLower == dLower || strings.Contains(licLower, dLower)) {
+			return true
+		}
+	}
+	return false
 }
 
 // ScanImage executes a container image vulnerability scan using Trivy.
@@ -293,8 +405,10 @@ func (a *TrivyAdapter) runNativeFallback(repoPath string, cfg *config.Config, di
 						LineStart:   1,
 						LineEnd:     1,
 						Message:     "Dockerfile does not specify a non-root USER instruction; container will execute as root",
+						Snippet:     "USER root",
+						OWASP:       "A05:2021-Security Misconfiguration",
 						FirstSeen:   time.Now().UTC(),
-						Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategoryIaC, "AVD-DS-0002", rel, "root"),
+						Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategoryIaC, "AVD-DS-0002", rel, "USER root"),
 					}
 					f.RiskScore = orchestrator.CalculateRiskScore(&f)
 					f.FixSuggestion = orchestrator.GenerateRemediation(repoPath, &f)
@@ -309,6 +423,7 @@ func (a *TrivyAdapter) runNativeFallback(repoPath string, cfg *config.Config, di
 					if strings.Contains(line, ":latest") || !strings.Contains(match[0], ":") {
 						findingID := orchestrator.GenerateID("trivy", "AVD-DS-0001", rel, idx+1)
 						if !cfg.ShouldIgnoreFinding(findingID) {
+							snippet := strings.TrimSpace(line)
 							f := orchestrator.Finding{
 								ID:          findingID,
 								Source:      "trivy",
@@ -320,9 +435,11 @@ func (a *TrivyAdapter) runNativeFallback(repoPath string, cfg *config.Config, di
 								File:        rel,
 								LineStart:   idx + 1,
 								LineEnd:     idx + 1,
-								Message:     fmt.Sprintf("Base image '%s' uses mutable :latest or untagged version; pin exact digest or semver tag", strings.TrimSpace(line)),
+								Message:     fmt.Sprintf("Base image '%s' uses mutable :latest or untagged version; pin exact digest or semver tag", snippet),
+								Snippet:     snippet,
+								OWASP:       "A05:2021-Security Misconfiguration",
 								FirstSeen:   time.Now().UTC(),
-								Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategoryIaC, "AVD-DS-0001", rel, line),
+								Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategoryIaC, "AVD-DS-0001", rel, snippet),
 							}
 							f.RiskScore = orchestrator.CalculateRiskScore(&f)
 							f.FixSuggestion = orchestrator.GenerateRemediation(repoPath, &f)
@@ -347,6 +464,7 @@ func (a *TrivyAdapter) runNativeFallback(repoPath string, cfg *config.Config, di
 				if strings.Contains(line, `"0.0.0.0/0"`) && (strings.Contains(line, "cidr_blocks") || strings.Contains(line, "cidr")) {
 					findingID := orchestrator.GenerateID("trivy", "AVD-AWS-0107", rel, lineNum)
 					if !cfg.ShouldIgnoreFinding(findingID) {
+						snippet := strings.TrimSpace(line)
 						f := orchestrator.Finding{
 							ID:          findingID,
 							Source:      "trivy",
@@ -359,8 +477,10 @@ func (a *TrivyAdapter) runNativeFallback(repoPath string, cfg *config.Config, di
 							LineStart:   lineNum,
 							LineEnd:     lineNum,
 							Message:     "Security group rule exposes open ingress to 0.0.0.0/0 (entire public internet)",
+							Snippet:     snippet,
+							OWASP:       "A05:2021-Security Misconfiguration",
 							FirstSeen:   time.Now().UTC(),
-							Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategoryIaC, "AVD-AWS-0107", rel, line),
+							Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategoryIaC, "AVD-AWS-0107", rel, snippet),
 						}
 						f.RiskScore = orchestrator.CalculateRiskScore(&f)
 						f.FixSuggestion = orchestrator.GenerateRemediation(repoPath, &f)
@@ -379,7 +499,7 @@ func (a *TrivyAdapter) runNativeFallback(repoPath string, cfg *config.Config, di
 			scanner := bufio.NewScanner(file)
 			lineNum := 0
 			actionRefRegex := regexp.MustCompile(`(?i)^\s*(?:-\s*)?uses:\s*([a-zA-Z0-9_\-\/]+)@([^\s]+)`)
-shaRegex := regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
+			shaRegex := regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
 
 			for scanner.Scan() {
 				lineNum++
@@ -389,6 +509,7 @@ shaRegex := regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
 				if strings.Contains(line, "pull_request_target") {
 					findingID := orchestrator.GenerateID("trivy", "AVD-GHA-0001", rel, lineNum)
 					if !cfg.ShouldIgnoreFinding(findingID) {
+						snippet := strings.TrimSpace(line)
 						f := orchestrator.Finding{
 							ID:          findingID,
 							Source:      "trivy",
@@ -401,8 +522,10 @@ shaRegex := regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
 							LineStart:   lineNum,
 							LineEnd:     lineNum,
 							Message:     "Workflow uses dangerous 'pull_request_target' trigger; this may expose repository secrets or execute untrusted code from forks",
+							Snippet:     snippet,
+							OWASP:       "A05:2021-Security Misconfiguration",
 							FirstSeen:   time.Now().UTC(),
-							Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategoryIaC, "AVD-GHA-0001", rel, line),
+							Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategoryIaC, "AVD-GHA-0001", rel, snippet),
 						}
 						f.RiskScore = orchestrator.CalculateRiskScore(&f)
 						f.FixSuggestion = orchestrator.GenerateRemediation(repoPath, &f)
@@ -414,6 +537,7 @@ shaRegex := regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
 				if strings.Contains(line, "write-all") {
 					findingID := orchestrator.GenerateID("trivy", "AVD-GHA-0003", rel, lineNum)
 					if !cfg.ShouldIgnoreFinding(findingID) {
+						snippet := strings.TrimSpace(line)
 						f := orchestrator.Finding{
 							ID:          findingID,
 							Source:      "trivy",
@@ -426,8 +550,10 @@ shaRegex := regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
 							LineStart:   lineNum,
 							LineEnd:     lineNum,
 							Message:     "Overly broad workflow permission 'write-all' detected; enforce least-privilege permissions",
+							Snippet:     snippet,
+							OWASP:       "A05:2021-Security Misconfiguration",
 							FirstSeen:   time.Now().UTC(),
-							Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategoryIaC, "AVD-GHA-0003", rel, line),
+							Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategoryIaC, "AVD-GHA-0003", rel, snippet),
 						}
 						f.RiskScore = orchestrator.CalculateRiskScore(&f)
 						f.FixSuggestion = orchestrator.GenerateRemediation(repoPath, &f)
@@ -443,6 +569,7 @@ shaRegex := regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
 					if !strings.HasPrefix(actionName, ".") && !shaRegex.MatchString(actionRef) {
 						findingID := orchestrator.GenerateID("trivy", "AVD-GHA-0002", rel, lineNum)
 						if !cfg.ShouldIgnoreFinding(findingID) {
+							snippet := strings.TrimSpace(line)
 							f := orchestrator.Finding{
 								ID:          findingID,
 								Source:      "trivy",
@@ -455,8 +582,10 @@ shaRegex := regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
 								LineStart:   lineNum,
 								LineEnd:     lineNum,
 								Message:     fmt.Sprintf("GitHub Action '%s@%s' is not pinned to a commit SHA; pin to full 40-character SHA to prevent supply-chain tampering", actionName, actionRef),
+								Snippet:     snippet,
+								OWASP:       "A05:2021-Security Misconfiguration",
 								FirstSeen:   time.Now().UTC(),
-								Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategoryIaC, "AVD-GHA-0002", rel, line),
+								Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategoryIaC, "AVD-GHA-0002", rel, snippet),
 							}
 							f.RiskScore = orchestrator.CalculateRiskScore(&f)
 							f.FixSuggestion = orchestrator.GenerateRemediation(repoPath, &f)

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -53,12 +54,21 @@ type semgrepOutput struct {
 		Extra struct {
 			Message  string `json:"message"`
 			Severity string `json:"severity"`
+			Lines    string `json:"lines"`
 			Metadata struct {
-				CWE  interface{} `json:"cwe"`
-				CVSS float64     `json:"cvss"`
+				CWE        interface{} `json:"cwe"`
+				OWASP      interface{} `json:"owasp"`
+				Category   string      `json:"category"`
+				Confidence string      `json:"confidence"`
+				CVSS       float64     `json:"cvss"`
 			} `json:"metadata"`
 		} `json:"extra"`
 	} `json:"results"`
+	Errors []struct {
+		Level   string `json:"level"`
+		Message string `json:"message"`
+		Path    string `json:"path"`
+	} `json:"errors"`
 }
 
 func (a *SemgrepAdapter) Run(ctx context.Context, repoPath string, cfg *config.Config, discovery *orchestrator.DiscoveryResult) ([]orchestrator.Finding, error) {
@@ -77,67 +87,109 @@ func (a *SemgrepAdapter) Run(ctx context.Context, repoPath string, cfg *config.C
 	return a.runCLI(ctx, binPath, repoPath, cfg)
 }
 
+// resolveRulesConfig returns the Semgrep config to use. Sentinel's bundled rules are
+// always extracted from the binary; a rules/ directory inside the scanned repository
+// (or the working directory) is never trusted as configuration. An explicit ruleset
+// (a registry pack or a path the user chose) replaces the bundle.
 func resolveRulesConfig(repoPath string, cfg *config.Config) (string, func(), error) {
-	if cfg.Scanners.SAST.Ruleset != "" && cfg.Scanners.SAST.Ruleset != "auto" {
-		return cfg.Scanners.SAST.Ruleset, nil, nil
+	if rs := cfg.Scanners.SAST.Ruleset; rs != "" && rs != "auto" {
+		return rs, nil, nil
 	}
-
-	// 1. Check local repoPath/rules
-	localRules := filepath.Join(repoPath, "rules")
-	if fi, err := os.Stat(localRules); err == nil && fi.IsDir() {
-		return localRules, nil, nil
+	tmpDir, err := os.MkdirTemp("", "sentinel-rules-*")
+	if err != nil {
+		return "", nil, fmt.Errorf("cannot create rules directory: %w", err)
 	}
-
-	// 2. Check current working directory rules/
-	cwdRules := filepath.Join(".", "rules")
-	if fi, err := os.Stat(cwdRules); err == nil && fi.IsDir() {
-		return cwdRules, nil, nil
+	cleanup := func() { _ = os.RemoveAll(tmpDir) }
+	entries, err := rules.Content.ReadDir(".")
+	if err != nil {
+		cleanup()
+		return "", nil, err
 	}
-
-	// 3. If offline, extract embedded rules so network egress is never attempted
-	if cfg.Offline {
-		tmpDir, err := os.MkdirTemp("", "sentinel-embedded-rules-*")
+	for _, entry := range entries {
+		// resilience-*.yml belongs to the resilience adapter; running it here would
+		// report every resilience issue twice.
+		if entry.IsDir() || strings.HasPrefix(entry.Name(), "resilience") {
+			continue
+		}
+		data, err := rules.Content.ReadFile(entry.Name())
 		if err != nil {
-			return "rules/", nil, nil
+			cleanup()
+			return "", nil, err
 		}
-		cleanup := func() {
-			_ = os.RemoveAll(tmpDir)
+		if err := os.WriteFile(filepath.Join(tmpDir, entry.Name()), data, 0600); err != nil {
+			cleanup()
+			return "", nil, err
 		}
-
-		entries, err := rules.Content.ReadDir(".")
-		if err == nil {
-			for _, entry := range entries {
-				if entry.IsDir() {
-					continue
-				}
-				data, err := rules.Content.ReadFile(entry.Name())
-				if err == nil {
-					_ = os.WriteFile(filepath.Join(tmpDir, entry.Name()), data, 0600)
-				}
-			}
-		}
-		return tmpDir, cleanup, nil
 	}
-
-	return "auto", nil, nil
+	return tmpDir, cleanup, nil
 }
 
-func (a *SemgrepAdapter) runCLI(ctx context.Context, binPath, repoPath string, cfg *config.Config) ([]orchestrator.Finding, error) {
-	args := []string{"scan", "--json", "--quiet", "--metrics=off"}
+// confinedPath resolves rel inside root and reports false if the result (after
+// following symlinks) escapes root.
+func confinedPath(root, rel string) (string, bool) {
+	rootReal, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", false
+	}
+	full, err := filepath.EvalSymlinks(filepath.Join(root, rel))
+	if err != nil {
+		return "", false
+	}
+	r, err := filepath.Rel(rootReal, full)
+	if err != nil || r == ".." || strings.HasPrefix(r, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return full, true
+}
 
-	ruleTarget, cleanupRules, _ := resolveRulesConfig(repoPath, cfg)
+// registryReachable is a quick probe so an offline or firewalled run does not wait
+// for the full adapter timeout.
+func registryReachable() bool {
+	conn, err := net.DialTimeout("tcp", "semgrep.dev:443", 3*time.Second)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
+
+// Semgrep prefixes rule IDs with the directory of the config file. Bundled rules are
+// extracted to a random temp dir, so strip that prefix to keep rule IDs (and the
+// fingerprints, baselines and suppressions built from them) stable between runs.
+var tempRulesPrefix = regexp.MustCompile(`^.*sentinel-rules-\d+\.`)
+
+func normalizeRuleID(id string) string { return tempRulesPrefix.ReplaceAllString(id, "") }
+
+func (a *SemgrepAdapter) runCLI(ctx context.Context, binPath, repoPath string, cfg *config.Config) ([]orchestrator.Finding, error) {
+	// --disable-version-check stops Semgrep phoning home (and stalling when offline).
+	args := []string{"scan", "--json", "--quiet", "--metrics=off", "--disable-version-check"}
+
+	ruleTarget, cleanupRules, err := resolveRulesConfig(repoPath, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("semgrep rules: %w", err)
+	}
 	if cleanupRules != nil {
 		defer cleanupRules()
 	}
-	if ruleTarget != "" {
-		args = append(args, "--config", ruleTarget)
+	args = append(args, "--config", ruleTarget)
+
+	// "--config auto" cannot be combined with --metrics=off (Semgrep exits 2), so add the
+	// registry's default pack explicitly, only when online and reachable.
+	if rs := cfg.Scanners.SAST.Ruleset; (rs == "" || rs == "auto") && !cfg.Offline {
+		if registryReachable() {
+			args = append(args, "--config", "p/default")
+		} else {
+			fmt.Fprintln(os.Stderr, "semgrep: registry unreachable, running bundled rules only")
+		}
 	}
 
 	for _, extraRule := range cfg.Scanners.SAST.ExtraRules {
-		fullRulePath := filepath.Join(repoPath, extraRule)
-		if _, err := os.Stat(fullRulePath); err == nil {
-			args = append(args, "--config", fullRulePath)
+		fullRulePath, ok := confinedPath(repoPath, extraRule)
+		if !ok {
+			fmt.Fprintf(os.Stderr, "semgrep: ignoring extra rule %q (missing or outside the repository)\n", extraRule)
+			continue
 		}
+		args = append(args, "--config", fullRulePath)
 	}
 
 	args = append(args, repoPath)
@@ -154,6 +206,24 @@ func (a *SemgrepAdapter) runCLI(ctx context.Context, binPath, repoPath string, c
 			errLine = errLine[:117] + "..."
 		}
 		return nil, fmt.Errorf("semgrep exited with error code %d: %s", toolRes.ExitCode, errLine)
+	}
+
+	var rawReport semgrepOutput
+	if err := json.Unmarshal(toolRes.Stdout, &rawReport); err == nil && len(rawReport.Errors) > 0 {
+		var parseErrs []string
+		for _, e := range rawReport.Errors {
+			if strings.ToLower(e.Level) == "error" {
+				parseErrs = append(parseErrs, fmt.Sprintf("%s: %s", e.Path, e.Message))
+			}
+		}
+		findings, pErr := ParseOutput(toolRes.Stdout, repoPath, cfg)
+		if pErr != nil {
+			return nil, pErr
+		}
+		if len(parseErrs) > 0 {
+			return findings, fmt.Errorf("%w: %s", orchestrator.ErrPartial, strings.Join(parseErrs, "; "))
+		}
+		return findings, nil
 	}
 
 	return ParseOutput(toolRes.Stdout, repoPath, cfg)
@@ -178,6 +248,7 @@ func ParseOutput(data []byte, repoPath string, cfg *config.Config) ([]orchestrat
 			continue
 		}
 
+		res.CheckID = normalizeRuleID(res.CheckID)
 		findingID := orchestrator.GenerateID("semgrep", res.CheckID, relFile, res.Start.Line)
 		if cfg.ShouldIgnoreFinding(findingID) {
 			continue
@@ -198,21 +269,41 @@ func ParseOutput(data []byte, repoPath string, cfg *config.Config) ([]orchestrat
 			cweStr = fmt.Sprintf("%v", res.Extra.Metadata.CWE)
 		}
 
+		owaspStr := ""
+		if res.Extra.Metadata.OWASP != nil {
+			owaspStr = fmt.Sprintf("%v", res.Extra.Metadata.OWASP)
+		}
+
+		category := orchestrator.CategorySAST
+		if strings.ToLower(res.Extra.Metadata.Category) == "secret" {
+			category = orchestrator.CategorySecret
+		}
+
+		snippet := strings.TrimSpace(res.Extra.Lines)
+		if snippet == "requires login" {
+			snippet = ""
+		}
+		if category == orchestrator.CategorySecret {
+			snippet = "[REDACTED_SECRET]"
+		}
+
 		f := orchestrator.Finding{
 			ID:          findingID,
 			Source:      "semgrep",
 			Engine:      orchestrator.EngineExternal,
-			Category:    orchestrator.CategorySAST,
+			Category:    category,
 			Rule:        res.CheckID,
 			Severity:    sev,
 			CWE:         cweStr,
+			OWASP:       owaspStr,
 			CVSS:        res.Extra.Metadata.CVSS,
 			File:        relFile,
 			LineStart:   res.Start.Line,
 			LineEnd:     res.End.Line,
 			Message:     res.Extra.Message,
+			Snippet:     snippet,
 			FirstSeen:   time.Now().UTC(),
-			Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategorySAST, res.CheckID, relFile, res.Extra.Message),
+			Fingerprint: orchestrator.GenerateFingerprint(category, res.CheckID, relFile, snippet),
 		}
 		f.RiskScore = orchestrator.CalculateRiskScore(&f)
 		f.FixSuggestion = orchestrator.GenerateRemediation(repoPath, &f)
@@ -336,13 +427,15 @@ func (a *SemgrepAdapter) runNativeFallback(repoPath string, cfg *config.Config) 
 						Rule:        r.ID,
 						Severity:    r.Severity,
 						CWE:         r.CWE,
+						OWASP:       "A03:2021-Injection",
 						CVSS:        7.8,
 						File:        rel,
 						LineStart:   lineNum,
 						LineEnd:     lineNum,
 						Message:     fmt.Sprintf("%s: %s", r.Message, strings.TrimSpace(line)),
+						Snippet:     strings.TrimSpace(line),
 						FirstSeen:   time.Now().UTC(),
-						Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategorySAST, r.ID, rel, line),
+						Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategorySAST, r.ID, rel, strings.TrimSpace(line)),
 					}
 					f.RiskScore = orchestrator.CalculateRiskScore(&f)
 					f.FixSuggestion = orchestrator.GenerateRemediation(repoPath, &f)

@@ -1,4 +1,5 @@
-FROM golang:1.27-alpine AS builder
+# Stage 1: Build Go binaries
+FROM golang:1.24-alpine AS builder
 
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -8,30 +9,57 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /bin/sentinel ./cmd/sentinel && \
     CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /bin/sentinel-agent ./cmd/sentinel-agent
 
-# Runtime stage
+# Stage 2: Runtime environment with all external security engines
 FROM alpine:3.20
 
-RUN apk add --no-cache ca-certificates git curl bash jq
+RUN apk add --no-cache ca-certificates git curl bash jq unzip python3 py3-pip
 
-# Install pinned external security engines
-ARG GITLEAKS_VER=8.18.4
-ARG OSV_VER=1.8.2
-ARG TRIVY_VER=0.51.0
+# Pin versions
+ENV GITLEAKS_VERSION=8.30.1 \
+    OSV_VERSION=2.7.0 \
+    TRIVY_VERSION=0.76.0 \
+    NUCLEI_VERSION=3.3.8 \
+    SEMGREP_VERSION=1.182.0 \
+    PATH="/opt/venv/bin:$PATH"
 
-RUN curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VER}/gitleaks_${GITLEAKS_VER}_linux_x64.tar.gz" | tar -xz -C /usr/local/bin gitleaks && \
-    curl -fsSL -o /usr/local/bin/osv-scanner "https://github.com/google/osv-scanner/releases/download/v${OSV_VER}/osv-scanner_linux_amd64" && \
-    chmod +x /usr/local/bin/osv-scanner && \
-    curl -fsSL "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VER}/trivy_${TRIVY_VER}_Linux-64bit.tar.gz" | tar -xz -C /usr/local/bin trivy && \
-    chmod +x /usr/local/bin/trivy
+# Setup Python virtualenv for Semgrep
+RUN python3 -m venv /opt/venv && \
+    /opt/venv/bin/pip install --no-cache-dir "semgrep==${SEMGREP_VERSION}"
 
+# Install Gitleaks
+RUN TMP_DIR=$(mktemp -d) && \
+    curl -fsSL -o "$TMP_DIR/gitleaks.tar.gz" "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" && \
+    tar -xzf "$TMP_DIR/gitleaks.tar.gz" -C /usr/local/bin gitleaks && \
+    chmod +x /usr/local/bin/gitleaks && \
+    rm -rf "$TMP_DIR"
+
+# Install OSV-Scanner
+RUN curl -fsSL -o /usr/local/bin/osv-scanner "https://github.com/google/osv-scanner/releases/download/v${OSV_VERSION}/osv-scanner_linux_amd64" && \
+    chmod +x /usr/local/bin/osv-scanner
+
+# Install Trivy
+RUN TMP_DIR=$(mktemp -d) && \
+    curl -fsSL -o "$TMP_DIR/trivy.tar.gz" "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" && \
+    tar -xzf "$TMP_DIR/trivy.tar.gz" -C /usr/local/bin trivy && \
+    chmod +x /usr/local/bin/trivy && \
+    rm -rf "$TMP_DIR"
+
+# Install Nuclei
+RUN TMP_DIR=$(mktemp -d) && \
+    curl -fsSL -o "$TMP_DIR/nuclei.zip" "https://github.com/projectdiscovery/nuclei/releases/download/v${NUCLEI_VERSION}/nuclei_${NUCLEI_VERSION}_linux_amd64.zip" && \
+    unzip -qo "$TMP_DIR/nuclei.zip" -d /usr/local/bin nuclei && \
+    chmod +x /usr/local/bin/nuclei && \
+    rm -rf "$TMP_DIR"
+
+# Copy Sentinel binaries
 COPY --from=builder /bin/sentinel /usr/local/bin/sentinel
 COPY --from=builder /bin/sentinel-agent /usr/local/bin/sentinel-agent
 
-# Create unprivileged security user
+# Create unprivileged security user (UID 10001, GID 10001)
 RUN addgroup -g 10001 sentinel && \
     adduser -u 10001 -G sentinel -D -s /bin/sh sentinel && \
-    mkdir -p /workspace /home/sentinel/.cache && \
-    chown -R sentinel:sentinel /workspace /home/sentinel
+    mkdir -p /workspace /home/sentinel/.cache /home/sentinel/.semgrep && \
+    chown -R sentinel:sentinel /workspace /home/sentinel /opt/venv
 
 WORKDIR /workspace
 USER 10001:10001

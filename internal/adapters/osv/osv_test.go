@@ -1,6 +1,8 @@
 package osv
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -135,4 +137,67 @@ func TestSupplyChainChecks(t *testing.T) {
 	}
 }
 
+func TestReachabilityHeuristic(t *testing.T) {
+	adapter := New()
+	tmpDir := t.TempDir()
 
+	// JS file with require('lodash')
+	jsCode := `const _ = require('lodash'); console.log(_.chunk([1, 2, 3], 2));`
+	if err := os.WriteFile(filepath.Join(tmpDir, "app.js"), []byte(jsCode), 0644); err != nil {
+		t.Fatalf("Failed to write app.js: %v", err)
+	}
+
+	if !adapter.checkReachability("lodash", tmpDir) {
+		t.Errorf("Expected lodash to be reachable when required in app.js")
+	}
+	if adapter.checkReachability("axios", tmpDir) {
+		t.Errorf("Expected axios to not be reachable when never imported")
+	}
+
+	// Python file with import requests
+	pyCode := `import requests\nres = requests.get('https://example.com')`
+	if err := os.WriteFile(filepath.Join(tmpDir, "main.py"), []byte(pyCode), 0644); err != nil {
+		t.Fatalf("Failed to write main.py: %v", err)
+	}
+	if !adapter.checkReachability("requests", tmpDir) {
+		t.Errorf("Expected requests to be reachable when imported in main.py")
+	}
+	if adapter.checkReachability("urllib3", tmpDir) {
+		t.Errorf("Expected urllib3 to not be reachable when never imported")
+	}
+}
+
+func TestNoLockfileSkipped(t *testing.T) {
+	adapter := New()
+	cfg := config.DefaultConfig()
+
+	// Run with no lockfiles and no manifests
+	discovery := &orchestrator.DiscoveryResult{}
+	_, err := adapter.runNativeFallback(t.TempDir(), cfg, discovery)
+	if err == nil {
+		t.Fatal("Expected runNativeFallback to return ErrSkipped when no lockfiles exist")
+	}
+	if !errors.Is(err, orchestrator.ErrSkipped) {
+		t.Errorf("Expected error to wrap orchestrator.ErrSkipped, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "no lockfile found") {
+		t.Errorf("Expected error to mention 'no lockfile found', got: %v", err)
+	}
+}
+
+func TestOSVOfflineSkip(t *testing.T) {
+	adapter := New()
+	cfg := config.DefaultConfig()
+	cfg.Offline = true
+
+	_, err := adapter.runCLI(context.Background(), "mock-osv-path", t.TempDir(), cfg, &orchestrator.DiscoveryResult{})
+	if err == nil {
+		t.Fatal("Expected runCLI to return ErrSkipped in offline mode")
+	}
+	if !errors.Is(err, orchestrator.ErrSkipped) {
+		t.Errorf("Expected error to wrap orchestrator.ErrSkipped, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "needs the OSV advisory database in --offline mode") {
+		t.Errorf("Expected offline message, got: %v", err)
+	}
+}

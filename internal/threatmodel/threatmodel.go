@@ -36,9 +36,9 @@ type AuthGuard struct {
 }
 
 type STRIDEItem struct {
-	Category string                 `json:"category"` // Spoofing, Tampering, Repudiation, InfoDisclosure, DoS, ElevationOfPrivilege
-	Finding  orchestrator.Finding   `json:"finding"`
-	OWASP    string                 `json:"owasp"`
+	Category string               `json:"category"` // Spoofing, Tampering, Repudiation, InfoDisclosure, DoS, ElevationOfPrivilege
+	Finding  orchestrator.Finding `json:"finding"`
+	OWASP    string               `json:"owasp"`
 }
 
 // GenerateThreatModel analyzes repository structure to discover entry points, data stores, and maps findings to STRIDE.

@@ -24,11 +24,27 @@ export class DiagnosticsManager {
             fileFindingsMap.set(absolutePath, list);
         }
 
+        const config = vscode.workspace.getConfiguration('sentinel');
+        const minSev = config.get<string>('severityFilter', 'all').toLowerCase();
+
+        const sevRank: Record<string, number> = {
+            low: 1,
+            medium: 2,
+            high: 3,
+            critical: 4
+        };
+        const minRank = sevRank[minSev] || 0;
+
         for (const [filePath, fileFindings] of fileFindingsMap.entries()) {
             const uri = vscode.Uri.file(filePath);
             const diagnostics: vscode.Diagnostic[] = [];
 
             for (const f of fileFindings) {
+                const fRank = sevRank[f.severity.toLowerCase()] || 0;
+                if (minRank > 0 && fRank < minRank) {
+                    continue;
+                }
+
                 const line = Math.max(0, f.line_start - 1);
                 const range = new vscode.Range(line, 0, line, 120);
 

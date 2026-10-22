@@ -15,6 +15,15 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Verify Code Formatting (gofmt)
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "❌ The following files are not gofmt-formatted:"
+            echo "$unformatted"
+            exit 1
+          fi
+
       - name: Go Vet
         run: go vet ./...
 
@@ -75,11 +84,33 @@ jobs:
 
       - name: Self-Scan Repository
         run: |
-          go run ./cmd/sentinel scan . --ci --fail-on=critical --format sarif --out results.sarif
+          go run ./cmd/sentinel scan . --ci --trust-repo-policy --fail-on=critical --format sarif --out results.sarif
 
       - name: Upload SARIF to GitHub Code Scanning
         if: always()
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: results.sarif
+
+  extension-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install dependencies
+        working-directory: extension-vscode
+        run: npm ci
+      - name: Build and test extension
+        working-directory: extension-vscode
+        run: npm test
+      - name: Package extension (.vsix)
+        working-directory: extension-vscode
+        run: npx @vscode/vsce package --no-dependencies
+      - name: Upload VSIX Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sentinel-vscode-extension
+          path: extension-vscode/*.vsix
 

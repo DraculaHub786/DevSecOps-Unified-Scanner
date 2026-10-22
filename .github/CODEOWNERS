@@ -1,0 +1,7 @@
+# Sentinel DevSecOps Unified Scanner CODEOWNERS
+# Protected files requiring security team approval
+/.sentinel.yml        @DraculaHub786
+/.github/             @DraculaHub786
+/plugins/             @DraculaHub786
+/deploy/              @DraculaHub786
+/rules/               @DraculaHub786

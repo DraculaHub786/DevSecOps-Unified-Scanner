@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"time"
 
-	_ "modernc.org/sqlite"
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/orchestrator"
+	_ "modernc.org/sqlite"
 )
 
 // ScanHistoryRecord represents a past scan entry stored in SQLite.
@@ -98,7 +98,6 @@ func (s *SQLiteStore) RecordScan(result *orchestrator.ScanResult, commitSHA stri
 	if err := s.initDB(db); err != nil {
 		return err
 	}
-
 
 	tx, err := db.Begin()
 	if err != nil {
@@ -289,4 +288,3 @@ func (s *SQLiteStore) GetBaseline() ([]string, error) {
 	}
 	return fps, nil
 }
-

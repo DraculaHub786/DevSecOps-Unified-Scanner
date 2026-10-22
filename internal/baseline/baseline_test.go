@@ -126,4 +126,3 @@ func TestFingerprintStabilityAcrossLineMoves(t *testing.T) {
 		t.Errorf("Expected finding at moved line to be recognized as existing baseline, but was treated as new: %+v", newFindings)
 	}
 }
-

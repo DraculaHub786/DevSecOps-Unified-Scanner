@@ -1,6 +1,17 @@
 name: 'Sentinel DevSecOps Scanner'
 description: 'Unified SAST, SCA, secrets, IaC and resilience scan that writes SARIF'
 author: 'DraculaHub786'
+# Usage in workflow:
+#   permissions:
+#     contents: read
+#     security-events: write
+#   steps:
+#     - uses: actions/checkout@v4
+#     - uses: DraculaHub786/DevSecOps-Unified-Scanner/deploy/github-actions/sentinel-scan@v0.1.2
+#     - uses: github/codeql-action/upload-sarif@v3
+#       if: always()
+#       with:
+#         sarif_file: results.sarif
 inputs:
   fail-on:
     description: 'Fail at or above this severity (critical, high, medium, low)'
@@ -12,7 +23,7 @@ inputs:
     default: '.'
 runs:
   using: 'docker'
-  image: 'docker://ghcr.io/draculahub786/devsecops-unified-scanner:v0.1.1'
+  image: 'docker://ghcr.io/draculahub786/devsecops-unified-scanner:latest'
   args:
     - 'scan'
     - ${{ inputs.path }}

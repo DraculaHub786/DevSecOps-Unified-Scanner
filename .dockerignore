@@ -1,0 +1,17 @@
+.git
+.github
+node_modules
+*/node_modules
+plugins/gitleaks*
+plugins/osv-scanner*
+plugins/trivy*
+plugins/nuclei*
+plugins/semgrep*
+bin/
+dist/
+build/
+*.exe
+*.test
+**/.sentinel/
+results.sarif
+summary.md

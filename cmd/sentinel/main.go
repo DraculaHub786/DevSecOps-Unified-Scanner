@@ -7,9 +7,9 @@ import (
 )
 
 var (
-	version = "0.1.1"
+	version = "0.1.2"
 	commit  = "none"
-	date    = "2026-10-21"
+	date    = "2026-10-22"
 )
 
 func main() {
@@ -47,6 +47,12 @@ scoring contextual risk, and suggesting actionable fixes without leaking source 
 	rootCmd.AddCommand(newWatchCmd())
 	rootCmd.AddCommand(newInstallHooksCmd())
 	rootCmd.AddCommand(newVersionCmd())
+
+	// V4 Phase 3 commands
+	rootCmd.AddCommand(newInitCmd())
+	rootCmd.AddCommand(newConfigCmd())
+	rootCmd.AddCommand(newRulesCmd())
+	rootCmd.AddCommand(newCompletionCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(2)

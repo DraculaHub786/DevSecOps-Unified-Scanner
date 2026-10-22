@@ -46,7 +46,9 @@ fetch_and_verify() {
         fi
         echo "✅ Checksum verified."
     else
-        echo "⚠️ Warning: No checksum entry found for $filename, proceeding cautiously."
+        echo "❌ No checksum entry for $filename; refusing to install an unverified binary."
+        rm -f "$dest"
+        exit 1
     fi
 }
 

@@ -48,142 +48,74 @@ func TestParseSemgrepGolden(t *testing.T) {
 	}
 }
 
-func TestResolveRulesConfig_Table(t *testing.T) {
-	tests := []struct {
-		name         string
-		setupRepo    func(t *testing.T) string
-		setupConfig  func() *config.Config
-		checkResult  func(t *testing.T, ruleTarget string, cleanup func(), err error)
-	}{
-		{
-			name: "explicit ruleset passthrough",
-			setupRepo: func(t *testing.T) string {
-				return t.TempDir()
-			},
-			setupConfig: func() *config.Config {
-				cfg := config.DefaultConfig()
-				cfg.Scanners.SAST.Ruleset = "p/security-audit"
-				return cfg
-			},
-			checkResult: func(t *testing.T, ruleTarget string, cleanup func(), err error) {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if ruleTarget != "p/security-audit" {
-					t.Errorf("expected 'p/security-audit', got %q", ruleTarget)
-				}
-				if cleanup != nil {
-					t.Errorf("cleanup should be nil for explicit ruleset passthrough")
-				}
-			},
-		},
-		{
-			name: "local rules/ priority",
-			setupRepo: func(t *testing.T) string {
-				dir := t.TempDir()
-				rulesDir := filepath.Join(dir, "rules")
-				if err := os.MkdirAll(rulesDir, 0755); err != nil {
-					t.Fatalf("failed to create local rules dir: %v", err)
-				}
-				return dir
-			},
-			setupConfig: func() *config.Config {
-				cfg := config.DefaultConfig()
-				cfg.Scanners.SAST.Ruleset = ""
-				return cfg
-			},
-			checkResult: func(t *testing.T, ruleTarget string, cleanup func(), err error) {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if !strings.HasSuffix(filepath.ToSlash(ruleTarget), "/rules") {
-					t.Errorf("expected local rules dir path, got %q", ruleTarget)
-				}
-				if cleanup != nil {
-					t.Errorf("cleanup should be nil for local rules")
-				}
-			},
-		},
-		{
-			name: "offline extraction of embedded *.yml files with cleanup",
-			setupRepo: func(t *testing.T) string {
-				return t.TempDir()
-			},
-			setupConfig: func() *config.Config {
-				cfg := config.DefaultConfig()
-				cfg.Offline = true
-				cfg.Scanners.SAST.Ruleset = ""
-				return cfg
-			},
-			checkResult: func(t *testing.T, ruleTarget string, cleanup func(), err error) {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if cleanup == nil {
-					t.Fatalf("cleanup must not be nil for offline extracted embedded rules")
-				}
+func TestResolveRulesConfig(t *testing.T) {
+	t.Run("explicit ruleset passes through", func(t *testing.T) {
+		cfg := config.DefaultConfig()
+		cfg.Scanners.SAST.Ruleset = "p/security-audit"
+		got, cleanup, err := resolveRulesConfig(t.TempDir(), cfg)
+		if err != nil || got != "p/security-audit" || cleanup != nil {
+			t.Fatalf("got %q cleanup=%v err=%v", got, cleanup != nil, err)
+		}
+	})
 
-				// Verify extracted directory exists and contains *.yml files
-				fi, statErr := os.Stat(ruleTarget)
-				if statErr != nil || !fi.IsDir() {
-					t.Fatalf("extracted ruleTarget %q does not exist or is not a directory", ruleTarget)
-				}
+	t.Run("bundled rules are used and a repo rules directory is never trusted", func(t *testing.T) {
+		repo := t.TempDir()
+		hostile := filepath.Join(repo, "rules")
+		if err := os.MkdirAll(hostile, 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(hostile, "x.yml"), []byte("not: [semgrep"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		cfg := config.DefaultConfig()
+		cfg.Scanners.SAST.Ruleset = ""
+		got, cleanup, err := resolveRulesConfig(repo, cfg)
+		if err != nil || cleanup == nil {
+			t.Fatalf("err=%v cleanup=%v", err, cleanup != nil)
+		}
+		if got == hostile || strings.HasPrefix(got, repo) {
+			t.Fatalf("used repository rules %q", got)
+		}
+		if _, err := os.Stat(filepath.Join(got, "sast-rules.yml")); err != nil {
+			t.Errorf("bundled sast rules missing: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(got, "resilience-rules.yml")); err == nil {
+			t.Error("resilience rules must not run in the SAST adapter")
+		}
+		cleanup()
+		if _, err := os.Stat(got); !os.IsNotExist(err) {
+			t.Error("cleanup must remove the extracted rules")
+		}
+	})
+}
 
-				entries, readErr := os.ReadDir(ruleTarget)
-				if readErr != nil || len(entries) == 0 {
-					t.Fatalf("expected embedded rule files in %q, got err=%v, count=%d", ruleTarget, readErr, len(entries))
-				}
-
-				foundYML := false
-				for _, e := range entries {
-					if strings.HasSuffix(e.Name(), ".yml") {
-						foundYML = true
-						break
-					}
-				}
-				if !foundYML {
-					t.Errorf("expected *.yml files in extracted ruleTarget %q", ruleTarget)
-				}
-
-				// Invoke cleanup and verify directory is removed
-				cleanup()
-				if _, statErr := os.Stat(ruleTarget); !os.IsNotExist(statErr) {
-					t.Errorf("expected ruleTarget %q to be deleted after cleanup, stat err: %v", ruleTarget, statErr)
-				}
-			},
-		},
-		{
-			name: "default auto result",
-			setupRepo: func(t *testing.T) string {
-				return t.TempDir()
-			},
-			setupConfig: func() *config.Config {
-				cfg := config.DefaultConfig()
-				cfg.Offline = false
-				cfg.Scanners.SAST.Ruleset = ""
-				return cfg
-			},
-			checkResult: func(t *testing.T, ruleTarget string, cleanup func(), err error) {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if ruleTarget != "auto" {
-					t.Errorf("expected 'auto', got %q", ruleTarget)
-				}
-				if cleanup != nil {
-					t.Errorf("cleanup should be nil for auto")
-				}
-			},
-		},
+func TestConfinedPath(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "ok.yml"), []byte("rules: []"), 0600); err != nil {
+		t.Fatal(err)
 	}
+	if _, ok := confinedPath(root, "ok.yml"); !ok {
+		t.Error("file inside the repo must be allowed")
+	}
+	if _, ok := confinedPath(root, "../../etc/passwd"); ok {
+		t.Error("path traversal must be refused")
+	}
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, "link")); err == nil {
+		_ = os.WriteFile(filepath.Join(outside, "r.yml"), []byte("x"), 0600)
+		if _, ok := confinedPath(root, "link/r.yml"); ok {
+			t.Error("symlink escaping the repo must be refused")
+		}
+	}
+}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			repo := tc.setupRepo(t)
-			cfg := tc.setupConfig()
-			target, cleanup, err := resolveRulesConfig(repo, cfg)
-			tc.checkResult(t, target, cleanup, err)
-		})
+func TestNormalizeRuleID(t *testing.T) {
+	if got := normalizeRuleID("tmp.sentinel-rules-3392925030.org-js-command-injection-exec"); got != "org-js-command-injection-exec" {
+		t.Fatalf("got %q", got)
+	}
+	reg := "javascript.express.security.audit.xss.direct-response-write"
+	if got := normalizeRuleID(reg); got != reg {
+		t.Fatalf("registry id changed: %q", got)
 	}
 }
 

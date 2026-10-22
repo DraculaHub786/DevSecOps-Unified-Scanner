@@ -4,13 +4,20 @@
   "description": "Unified SAST, SCA, secrets, IaC, and resilience scanner with inline diagnostics and auto-remediation.",
   "version": "1.0.0",
   "publisher": "draculahub786",
-  "icon": "media/shield.svg",
+  "license": "Apache-2.0",
+  "icon": "media/shield.png",
   "repository": {
     "type": "git",
     "url": "https://github.com/DraculaHub786/DevSecOps-Unified-Scanner"
   },
   "engines": {
     "vscode": "^1.80.0"
+  },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Sentinel runs security scanning tools locally and requires a trusted workspace."
+    }
   },
   "categories": [
     "Linters",
@@ -25,25 +32,106 @@
     "commands": [
       {
         "command": "sentinel.scanWorkspace",
-        "title": "Sentinel: Scan Workspace",
-        "category": "Sentinel"
+        "title": "Scan Workspace",
+        "category": "Sentinel",
+        "icon": "$(shield)"
       },
       {
         "command": "sentinel.scanFile",
-        "title": "Sentinel: Scan Current File",
+        "title": "Scan Current File",
         "category": "Sentinel"
       },
       {
         "command": "sentinel.showFindingDetails",
-        "title": "Sentinel: Explain Finding",
-        "category": "Sentinel"
+        "title": "Explain Finding",
+        "category": "Sentinel",
+        "icon": "$(info)"
       },
       {
         "command": "sentinel.applyFix",
-        "title": "Sentinel: Apply Suggested Fix",
+        "title": "Apply Suggested Fix",
+        "category": "Sentinel",
+        "icon": "$(tools)"
+      },
+      {
+        "command": "sentinel.threatModel",
+        "title": "Generate Threat Model",
         "category": "Sentinel"
+      },
+      {
+        "command": "sentinel.sbom",
+        "title": "Generate SBOM (CycloneDX / SPDX)",
+        "category": "Sentinel"
+      },
+      {
+        "command": "sentinel.scanImage",
+        "title": "Scan Container Image",
+        "category": "Sentinel"
+      },
+      {
+        "command": "sentinel.doctor",
+        "title": "Tool Availability & Status (Doctor)",
+        "category": "Sentinel"
+      },
+      {
+        "command": "sentinel.createBaseline",
+        "title": "Accept Current Findings into Baseline",
+        "category": "Sentinel"
+      },
+      {
+        "command": "sentinel.suppressFinding",
+        "title": "Suppress Security Finding",
+        "category": "Sentinel",
+        "icon": "$(eye-closed)"
+      },
+      {
+        "command": "sentinel.openReport",
+        "title": "Open Scan Report",
+        "category": "Sentinel"
+      },
+      {
+        "command": "sentinel.dastScan",
+        "title": "Run Authorized DAST Scan",
+        "category": "Sentinel"
+      },
+      {
+        "command": "sentinel.toggleSidebarGrouping",
+        "title": "Toggle Findings Grouping",
+        "category": "Sentinel",
+        "icon": "$(list-tree)"
       }
     ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "sentinel.scanWorkspace",
+          "when": "view == sentinel.findings",
+          "group": "navigation"
+        },
+        {
+          "command": "sentinel.toggleSidebarGrouping",
+          "when": "view == sentinel.findings",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "sentinel.showFindingDetails",
+          "when": "view == sentinel.findings && viewItem == findingItem",
+          "group": "inline"
+        },
+        {
+          "command": "sentinel.applyFix",
+          "when": "view == sentinel.findings && viewItem == findingItem",
+          "group": "1_actions"
+        },
+        {
+          "command": "sentinel.suppressFinding",
+          "when": "view == sentinel.findings && viewItem == findingItem",
+          "group": "2_actions"
+        }
+      ]
+    },
     "viewsContainers": {
       "activitybar": [
         {
@@ -72,7 +160,49 @@
         "sentinel.agentPort": {
           "type": "number",
           "default": 48921,
-          "description": "TCP port of the local sentinel-agent IPC service."
+          "description": "TCP port of the local sentinel-agent IPC service (127.0.0.1)."
+        },
+        "sentinel.binaryPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the sentinel binary executable (if not on system PATH)."
+        },
+        "sentinel.offline": {
+          "type": "boolean",
+          "default": false,
+          "description": "Disable external network requests (strict offline mode)."
+        },
+        "sentinel.engineMode": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "full",
+            "lite"
+          ],
+          "default": "auto",
+          "description": "Scanning engine mode: auto (prefer external CLI, fallback to lite), full (require external), or lite (embedded only)."
+        },
+        "sentinel.policyPath": {
+          "type": "string",
+          "default": "",
+          "description": "Optional custom path to .sentinel.yml policy file."
+        },
+        "sentinel.severityFilter": {
+          "type": "string",
+          "enum": [
+            "all",
+            "critical",
+            "high",
+            "medium",
+            "low"
+          ],
+          "default": "all",
+          "description": "Filter inline diagnostics by minimum severity threshold."
+        },
+        "sentinel.debounceMs": {
+          "type": "number",
+          "default": 500,
+          "description": "Debounce delay (ms) for incremental on-save scans."
         },
         "sentinel.cloudSync": {
           "type": "boolean",
@@ -86,7 +216,9 @@
     "vscode:prepublish": "npm run build",
     "compile": "tsc -p ./",
     "build": "tsc -p ./",
-    "watch": "tsc -watch -p ./"
+    "watch": "tsc -watch -p ./",
+    "test": "tsc -p ./ && node ./dist/test/unit.test.js",
+    "package": "npx @vscode/vsce package --no-dependencies"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

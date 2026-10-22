@@ -7,6 +7,9 @@ rules:
     languages: [go]
     metadata:
       cwe: "CWE-400"
+      owasp: "A04:2021-Insecure Design"
+      category: "resilience"
+      confidence: "high"
 
   - id: org-bounded-request-body
     patterns:
@@ -16,3 +19,6 @@ rules:
     languages: [go]
     metadata:
       cwe: "CWE-400"
+      owasp: "A04:2021-Insecure Design"
+      category: "resilience"
+      confidence: "high"

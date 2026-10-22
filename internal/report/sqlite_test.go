@@ -160,4 +160,3 @@ func TestSQLiteStoreBaseline(t *testing.T) {
 		t.Fatalf("Expected 2 unique baseline fingerprints, got %d (%v)", len(loaded), loaded)
 	}
 }
-

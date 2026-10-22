@@ -55,6 +55,8 @@ type Finding struct {
 	LineStart     int       `json:"line_start"`
 	LineEnd       int       `json:"line_end"`
 	Message       string    `json:"message"`
+	Snippet       string    `json:"snippet,omitempty"`
+	OWASP         string    `json:"owasp,omitempty"`
 	Reachable     *bool     `json:"reachable,omitempty"`
 	Exposed       *bool     `json:"exposed,omitempty"`
 	RiskScore     float64   `json:"risk_score"`

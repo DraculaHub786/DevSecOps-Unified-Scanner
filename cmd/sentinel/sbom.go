@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/spf13/cobra"
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/adapters/trivy"
+	"github.com/spf13/cobra"
 )
 
 func newSBOMCmd() *cobra.Command {

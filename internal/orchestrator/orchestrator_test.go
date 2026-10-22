@@ -11,36 +11,35 @@ import (
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/config"
 )
 
-
 func TestCorrelateAndDeduplicate(t *testing.T) {
 	reachableTrue := true
 	findings := []Finding{
 		{
-			ID:          "1",
-			Source:      "osv",
-			Category:    CategorySCA,
-			Rule:        "CVE-2021-23337",
-			Severity:    SeverityMedium,
-			CVE:         "CVE-2021-23337",
-			CVSS:        5.0,
-			File:        "package.json",
-			LineStart:   10,
-			Message:     "Command injection in lodash",
-			Reachable:   &reachableTrue,
-			FirstSeen:   time.Now(),
+			ID:        "1",
+			Source:    "osv",
+			Category:  CategorySCA,
+			Rule:      "CVE-2021-23337",
+			Severity:  SeverityMedium,
+			CVE:       "CVE-2021-23337",
+			CVSS:      5.0,
+			File:      "package.json",
+			LineStart: 10,
+			Message:   "Command injection in lodash",
+			Reachable: &reachableTrue,
+			FirstSeen: time.Now(),
 		},
 		{
-			ID:          "2",
-			Source:      "trivy",
-			Category:    CategorySCA,
-			Rule:        "CVE-2021-23337",
-			Severity:    SeverityHigh,
-			CVE:         "CVE-2021-23337",
-			CVSS:        7.2,
-			File:        "package.json",
-			LineStart:   10,
-			Message:     "Critical command injection in lodash package",
-			FirstSeen:   time.Now(),
+			ID:        "2",
+			Source:    "trivy",
+			Category:  CategorySCA,
+			Rule:      "CVE-2021-23337",
+			Severity:  SeverityHigh,
+			CVE:       "CVE-2021-23337",
+			CVSS:      7.2,
+			File:      "package.json",
+			LineStart: 10,
+			Message:   "Critical command injection in lodash package",
+			FirstSeen: time.Now(),
 		},
 	}
 
@@ -169,17 +168,17 @@ func TestDiscoveryEntryPointExclusions(t *testing.T) {
 
 type panickingAdapter struct{}
 
-func (p *panickingAdapter) Name() string                                   { return "panic-bot" }
-func (p *panickingAdapter) Category() string                               { return "sast" }
-func (p *panickingAdapter) IsApplicable(d *DiscoveryResult) bool          { return true }
+func (p *panickingAdapter) Name() string                         { return "panic-bot" }
+func (p *panickingAdapter) Category() string                     { return "sast" }
+func (p *panickingAdapter) IsApplicable(d *DiscoveryResult) bool { return true }
 func (p *panickingAdapter) Run(ctx context.Context, repoPath string, cfg *config.Config, d *DiscoveryResult) ([]Finding, error) {
 	panic("unexpected fatal crash inside adapter")
 }
 
 type healthyAdapter struct{}
 
-func (h *healthyAdapter) Name() string                          { return "healthy-bot" }
-func (h *healthyAdapter) Category() string                      { return "secrets" }
+func (h *healthyAdapter) Name() string                         { return "healthy-bot" }
+func (h *healthyAdapter) Category() string                     { return "secrets" }
 func (h *healthyAdapter) IsApplicable(d *DiscoveryResult) bool { return true }
 func (h *healthyAdapter) Run(ctx context.Context, repoPath string, cfg *config.Config, d *DiscoveryResult) ([]Finding, error) {
 	return []Finding{
@@ -229,8 +228,8 @@ func TestSchedulerPanicRecovery(t *testing.T) {
 
 type orderingAdapter struct{}
 
-func (o *orderingAdapter) Name() string                          { return "order-bot" }
-func (o *orderingAdapter) Category() string                      { return "sast" }
+func (o *orderingAdapter) Name() string                         { return "order-bot" }
+func (o *orderingAdapter) Category() string                     { return "sast" }
 func (o *orderingAdapter) IsApplicable(d *DiscoveryResult) bool { return true }
 func (o *orderingAdapter) Run(ctx context.Context, repoPath string, cfg *config.Config, d *DiscoveryResult) ([]Finding, error) {
 	return []Finding{
@@ -270,8 +269,8 @@ func TestSchedulerStableOrdering(t *testing.T) {
 
 type mockOSVEmbeddedAdapter struct{}
 
-func (m *mockOSVEmbeddedAdapter) Name() string                          { return "osv" }
-func (m *mockOSVEmbeddedAdapter) Category() string                      { return "sca" }
+func (m *mockOSVEmbeddedAdapter) Name() string                         { return "osv" }
+func (m *mockOSVEmbeddedAdapter) Category() string                     { return "sca" }
 func (m *mockOSVEmbeddedAdapter) IsApplicable(d *DiscoveryResult) bool { return true }
 func (m *mockOSVEmbeddedAdapter) Run(ctx context.Context, repoPath string, cfg *config.Config, d *DiscoveryResult) ([]Finding, error) {
 	return []Finding{
@@ -319,6 +318,3 @@ func TestSchedulerOSVLiteWarningAndEngineDetermination(t *testing.T) {
 		t.Errorf("expected warning about OSV embedded advisory count, got: %v", result.Warnings)
 	}
 }
-
-
-

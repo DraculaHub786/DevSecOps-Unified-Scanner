@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/spf13/cobra"
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/doctor"
+	"github.com/spf13/cobra"
 )
 
 func newDoctorCmd() *cobra.Command {

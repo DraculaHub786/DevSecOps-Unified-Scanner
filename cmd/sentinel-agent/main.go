@@ -22,8 +22,13 @@ import (
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/adapters/resilience"
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/adapters/semgrep"
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/adapters/trivy"
+	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/baseline"
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/config"
+	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/doctor"
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/orchestrator"
+	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/safety"
+	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/threatmodel"
+	"gopkg.in/yaml.v3"
 )
 
 // JSON-RPC 2.0 structures with authentication token
@@ -51,6 +56,8 @@ type ScanRunParams struct {
 	RepoPath    string   `json:"repoPath"`
 	Paths       []string `json:"paths"`
 	Incremental bool     `json:"incremental"`
+	Offline     bool     `json:"offline"`
+	PolicyPath  string   `json:"policyPath"`
 }
 
 type ScanStatusParams struct {
@@ -65,6 +72,33 @@ type FindingsListParams struct {
 type FixParams struct {
 	RepoPath  string `json:"repoPath"`
 	FindingID string `json:"findingId"`
+}
+
+type BaselineParams struct {
+	RepoPath string `json:"repoPath"`
+}
+
+type SuppressParams struct {
+	RepoPath  string `json:"repoPath"`
+	FindingID string `json:"findingId"`
+	Reason    string `json:"reason"`
+	Expires   string `json:"expires,omitempty"`
+}
+
+type ThreatModelParams struct {
+	RepoPath string `json:"repoPath"`
+}
+
+type SBOMParams struct {
+	RepoPath string `json:"repoPath"`
+	Format   string `json:"format"`
+	Out      string `json:"out"`
+}
+
+type DASTParams struct {
+	Target       string `json:"target"`
+	Authorized   bool   `json:"authorized"`
+	AllowPrivate bool   `json:"allowPrivate"`
 }
 
 type AgentServer struct {
@@ -191,7 +225,19 @@ func (s *AgentServer) handleRequest(req *JSONRPCRequest) JSONRPCResponse {
 		s.mu.Unlock()
 
 		go func() {
-			cfg, _ := config.Load(params.RepoPath)
+			var cfg *config.Config
+			var err error
+			if params.PolicyPath != "" {
+				cfg, err = config.LoadFile(params.PolicyPath)
+			} else {
+				cfg, err = config.Load(params.RepoPath)
+			}
+			if err != nil || cfg == nil {
+				cfg = config.DefaultConfig()
+			}
+			if params.Offline {
+				cfg.Offline = true
+			}
 			scheduler := orchestrator.NewScheduler(
 				gitleaks.New(),
 				osv.New(),
@@ -319,6 +365,182 @@ func (s *AgentServer) handleRequest(req *JSONRPCRequest) JSONRPCResponse {
 			"success":     true,
 			"appliedDiff": diff,
 		}
+
+	case "agent.ping", "agent.health":
+		resp.Result = map[string]interface{}{
+			"status":  "ok",
+			"version": "0.2.0",
+		}
+
+	case "agent.coverage":
+		s.mu.RLock()
+		var latestScan *orchestrator.ScanResult
+		for _, scan := range s.scans {
+			if latestScan == nil || scan.FinishedAt.After(latestScan.FinishedAt) {
+				latestScan = scan
+			}
+		}
+		s.mu.RUnlock()
+
+		if latestScan != nil && latestScan.Coverage != nil {
+			resp.Result = latestScan.Coverage
+		} else {
+			resp.Result = map[string]interface{}{
+				"totalCategories":  6,
+				"activeCategories": 6,
+				"items":            []interface{}{},
+			}
+		}
+
+	case "doctor.run":
+		statuses := doctor.CheckEngines()
+		resp.Result = statuses
+
+	case "baseline.create":
+		var params BaselineParams
+		_ = json.Unmarshal(req.Params, &params)
+		if params.RepoPath == "" {
+			params.RepoPath, _ = filepath.Abs(".")
+		}
+		s.mu.RLock()
+		var findings []orchestrator.Finding
+		for _, scan := range s.scans {
+			findings = append(findings, scan.Findings...)
+		}
+		s.mu.RUnlock()
+
+		savedPath, err := baseline.Save(params.RepoPath, findings)
+		if err != nil {
+			resp.Error = &JSONRPCError{Code: -32000, Message: fmt.Sprintf("Failed to save baseline: %v", err)}
+			return resp
+		}
+		resp.Result = map[string]interface{}{
+			"success": true,
+			"count":   len(findings),
+			"path":    savedPath,
+		}
+
+	case "suppress.add":
+		var params SuppressParams
+		_ = json.Unmarshal(req.Params, &params)
+		findingID := strings.TrimSpace(params.FindingID)
+		reason := strings.TrimSpace(params.Reason)
+		if findingID == "" {
+			resp.Error = &JSONRPCError{Code: -32602, Message: "findingId is required"}
+			return resp
+		}
+		if reason == "" {
+			resp.Error = &JSONRPCError{Code: -32602, Message: "reason is mandatory"}
+			return resp
+		}
+		if params.RepoPath == "" {
+			params.RepoPath, _ = filepath.Abs(".")
+		}
+		cfgFile := filepath.Join(params.RepoPath, ".sentinel.yml")
+		cfg, err := config.Load(params.RepoPath)
+		if err != nil {
+			cfg = config.DefaultConfig()
+		}
+		found := false
+		for i, supp := range cfg.Ignore.Findings {
+			if strings.EqualFold(supp.ID, findingID) {
+				cfg.Ignore.Findings[i].Reason = reason
+				cfg.Ignore.Findings[i].Expires = params.Expires
+				found = true
+				break
+			}
+		}
+		if !found {
+			cfg.Ignore.Findings = append(cfg.Ignore.Findings, config.FindingSuppression{
+				ID:      findingID,
+				Reason:  reason,
+				Expires: params.Expires,
+			})
+		}
+		outData, err := yaml.Marshal(cfg)
+		if err != nil {
+			resp.Error = &JSONRPCError{Code: -32000, Message: fmt.Sprintf("Failed to marshal config: %v", err)}
+			return resp
+		}
+		if err := os.WriteFile(cfgFile, outData, 0644); err != nil {
+			resp.Error = &JSONRPCError{Code: -32000, Message: fmt.Sprintf("Failed to write %s: %v", cfgFile, err)}
+			return resp
+		}
+		resp.Result = map[string]interface{}{
+			"success":   true,
+			"findingId": findingID,
+			"file":      cfgFile,
+		}
+
+	case "threatmodel.run":
+		var params ThreatModelParams
+		_ = json.Unmarshal(req.Params, &params)
+		if params.RepoPath == "" {
+			params.RepoPath, _ = filepath.Abs(".")
+		}
+		s.mu.RLock()
+		var findings []orchestrator.Finding
+		for _, scan := range s.scans {
+			findings = append(findings, scan.Findings...)
+		}
+		s.mu.RUnlock()
+
+		tmReport, err := threatmodel.GenerateThreatModel(params.RepoPath, findings)
+		if err != nil {
+			resp.Error = &JSONRPCError{Code: -32000, Message: fmt.Sprintf("Threat model failed: %v", err)}
+			return resp
+		}
+		resp.Result = tmReport
+
+	case "sbom.generate":
+		var params SBOMParams
+		_ = json.Unmarshal(req.Params, &params)
+		if params.RepoPath == "" {
+			params.RepoPath, _ = filepath.Abs(".")
+		}
+		if params.Format == "" {
+			params.Format = "cyclonedx"
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+		defer cancel()
+		err := trivy.GenerateSBOM(ctx, params.RepoPath, params.Format, params.Out)
+		if err != nil {
+			resp.Error = &JSONRPCError{Code: -32000, Message: fmt.Sprintf("SBOM generation failed: %v", err)}
+			return resp
+		}
+		resp.Result = map[string]interface{}{
+			"success": true,
+			"format":  params.Format,
+			"out":     params.Out,
+		}
+
+	case "dast.run":
+		var params DASTParams
+		_ = json.Unmarshal(req.Params, &params)
+		if params.Target == "" {
+			resp.Error = &JSONRPCError{Code: -32602, Message: "target is required"}
+			return resp
+		}
+		if !params.Authorized {
+			resp.Error = &JSONRPCError{Code: -32000, Message: "Explicit authorization required (--i-have-authorization)"}
+			return resp
+		}
+		repoPath, _ := filepath.Abs(".")
+		cfg, _ := config.Load(repoPath)
+		if err := safety.ValidateTarget(params.Target, cfg.Scanners.DAST.Allowlist, params.Authorized, params.AllowPrivate); err != nil {
+			resp.Error = &JSONRPCError{Code: -32000, Message: fmt.Sprintf("Target safety refusal: %v", err)}
+			return resp
+		}
+		adapter := nuclei.NewWithAuth(params.Authorized)
+		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+		defer cancel()
+		cfg.Scanners.DAST.Target = params.Target
+		findings, err := adapter.Run(ctx, repoPath, cfg, nil)
+		if err != nil {
+			resp.Error = &JSONRPCError{Code: -32000, Message: fmt.Sprintf("DAST scan failed: %v", err)}
+			return resp
+		}
+		resp.Result = findings
 
 	default:
 		resp.Error = &JSONRPCError{Code: -32601, Message: "Method not found"}

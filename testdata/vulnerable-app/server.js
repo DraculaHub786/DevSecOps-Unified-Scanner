@@ -2,9 +2,12 @@ const express = require('express');
 const child_process = require('child_process');
 const app = express();
 
-// Hardcoded secret (Gitleaks / Secret category)
-const GITHUB_TOKEN = "ghp_1234567890abcdefghijklmnopqrstuvwxyz";
-const AWS_SECRET = "AKIAIOSFODNN7EXAMPLE";
+// Intentionally fake secrets: random but well-formed so real detectors flag them
+const GITHUB_TOKEN = "ghp_R8kD3mZq1Xv7LpN2sT9wYb4HcF6jGa0UeQ5o";
+const AWS_ACCESS_KEY_ID = "AKIAZ3MSJV4WWDNTQHPW";
+const AWS_SECRET_ACCESS_KEY = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
+const SLACK_BOT_TOKEN = "xoxb-123456789012-1234567890123-456789abcdefghijklmnopqrst";
+const SLACK_WEBHOOK_URL = "https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX";
 
 // SAST: Command injection
 app.get('/run', (req, res) => {

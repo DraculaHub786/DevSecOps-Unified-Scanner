@@ -141,10 +141,12 @@ func ParseReport(data []byte, repoPath string, cfg *config.Config) ([]orchestrat
 			Rule:        entry.RuleID,
 			Severity:    orchestrator.SeverityCritical,
 			CWE:         "CWE-798", // Use of Hard-coded Credentials
+			OWASP:       "A07:2021-Identification and Authentication Failures",
 			File:        relFile,
 			LineStart:   entry.StartLine,
 			LineEnd:     entry.EndLine,
 			Message:     fmt.Sprintf("%s (Redacted: %s)", entry.Description, redacted),
+			Snippet:     redacted,
 			FirstSeen:   time.Now().UTC(),
 			Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategorySecret, entry.RuleID, relFile, redacted),
 		}
@@ -187,6 +189,12 @@ func (a *GitleaksAdapter) runNativeFallback(repoPath string, cfg *config.Config)
 			ID:          "slack-token",
 			Description: "Identified Slack API Bot/User Token",
 			Pattern:     regexp.MustCompile(`xox[baprs]-[0-9a-zA-Z]{10,48}`),
+			CWE:         "CWE-798",
+		},
+		{
+			ID:          "slack-webhook",
+			Description: "Identified incoming Slack Webhook URL",
+			Pattern:     regexp.MustCompile(`https://hooks\.slack\.com/services/T[0-9a-zA-Z_]+/B[0-9a-zA-Z_]+/[0-9a-zA-Z_]+`),
 			CWE:         "CWE-798",
 		},
 		{
@@ -264,10 +272,12 @@ func (a *GitleaksAdapter) runNativeFallback(repoPath string, cfg *config.Config)
 						Rule:        r.ID,
 						Severity:    orchestrator.SeverityCritical,
 						CWE:         r.CWE,
+						OWASP:       "A07:2021-Identification and Authentication Failures",
 						File:        rel,
 						LineStart:   lineNum,
 						LineEnd:     lineNum,
 						Message:     fmt.Sprintf("%s (Redacted: %s)", r.Description, redacted),
+						Snippet:     redacted,
 						FirstSeen:   time.Now().UTC(),
 						Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategorySecret, r.ID, rel, redacted),
 					}

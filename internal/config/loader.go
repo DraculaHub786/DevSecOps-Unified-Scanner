@@ -142,7 +142,6 @@ func (c *Config) ShouldIgnorePath(relPath string) bool {
 	return false
 }
 
-
 // ShouldIgnoreFinding checks whether a finding ID is in the suppressed findings list and not expired.
 func (c *Config) ShouldIgnoreFinding(findingID string) bool {
 	today := time.Now().UTC()

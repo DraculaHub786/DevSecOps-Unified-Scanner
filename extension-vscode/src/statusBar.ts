@@ -36,6 +36,11 @@ export class SentinelStatusBar {
         this.item.tooltip = 'Click to scan workspace';
     }
 
+    public setError(msg?: string): void {
+        this.item.text = '$(alert) Sentinel: Scan Error';
+        this.item.tooltip = msg ? `Sentinel error: ${msg}. Click to retry scan.` : 'Sentinel scan encountered an error. Click to retry scan.';
+    }
+
     public dispose(): void {
         this.item.dispose();
     }

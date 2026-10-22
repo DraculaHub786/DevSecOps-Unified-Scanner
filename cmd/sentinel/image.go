@@ -6,10 +6,10 @@ import (
 	"os"
 	"time"
 
-	"github.com/spf13/cobra"
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/adapters/trivy"
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/orchestrator"
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/report"
+	"github.com/spf13/cobra"
 )
 
 func newImageCmd() *cobra.Command {

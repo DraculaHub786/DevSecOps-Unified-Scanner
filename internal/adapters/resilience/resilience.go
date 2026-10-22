@@ -155,6 +155,7 @@ func (a *ResilienceAdapter) Run(ctx context.Context, repoPath string, cfg *confi
 						continue
 					}
 
+					snippet := strings.TrimSpace(line)
 					f := orchestrator.Finding{
 						ID:          findingID,
 						Source:      "resilience",
@@ -168,8 +169,10 @@ func (a *ResilienceAdapter) Run(ctx context.Context, repoPath string, cfg *confi
 						LineStart:   lineNum,
 						LineEnd:     lineNum,
 						Message:     r.Description,
+						Snippet:     snippet,
+						OWASP:       "A04:2021-Insecure Design",
 						FirstSeen:   time.Now().UTC(),
-						Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategoryResilience, r.ID, rel, line),
+						Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategoryResilience, r.ID, rel, snippet),
 					}
 					f.RiskScore = orchestrator.CalculateRiskScore(&f)
 					f.FixSuggestion = orchestrator.GenerateRemediation(repoPath, &f)
@@ -198,8 +201,10 @@ func (a *ResilienceAdapter) Run(ctx context.Context, repoPath string, cfg *confi
 				LineStart:   1,
 				LineEnd:     1,
 				Message:     "HTTP service endpoints detected without visible rate-limiting middleware (e.g. tollbooth, express-rate-limit, slowapi)",
+				Snippet:     "rate-limiter: (missing)",
+				OWASP:       "A04:2021-Insecure Design",
 				FirstSeen:   time.Now().UTC(),
-				Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategoryResilience, "missing-rate-limiter", "server", "ratelimit"),
+				Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategoryResilience, "missing-rate-limiter", "server", "missing-rate-limiter"),
 			}
 			f.RiskScore = orchestrator.CalculateRiskScore(&f)
 			f.FixSuggestion = orchestrator.GenerateRemediation(repoPath, &f)

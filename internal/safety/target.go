@@ -48,4 +48,3 @@ func IsDisallowedIP(ip net.IP, allowPrivate bool) bool {
 	}
 	return false
 }
-

@@ -10,8 +10,12 @@ import (
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/orchestrator"
 )
 
+// BaselineVersionCurrent represents current fingerprinting scheme version (v2.0).
+const BaselineVersionCurrent = "2.0"
+
 // BaselineFile represents saved state of accepted findings.
 type BaselineFile struct {
+	Version      string    `json:"version"`
 	CreatedAt    time.Time `json:"created_at"`
 	Fingerprints []string  `json:"fingerprints"`
 }
@@ -42,6 +46,7 @@ func Save(repoPath string, findings []orchestrator.Finding) (string, error) {
 	}
 
 	b := BaselineFile{
+		Version:      BaselineVersionCurrent,
 		CreatedAt:    time.Now().UTC(),
 		Fingerprints: fingerprints,
 	}
@@ -65,6 +70,10 @@ func Load(repoPath string) (map[string]bool, error) {
 	var b BaselineFile
 	if err := json.Unmarshal(data, &b); err != nil {
 		return nil, fmt.Errorf("failed to parse baseline file: %w", err)
+	}
+
+	if b.Version != BaselineVersionCurrent {
+		fmt.Fprintf(os.Stderr, "⚠️ Notice: Baseline format updated to v2.0 (source snippet fingerprints). Run 'sentinel baseline' to refresh baseline.\n")
 	}
 
 	set := make(map[string]bool, len(b.Fingerprints))

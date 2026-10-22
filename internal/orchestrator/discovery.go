@@ -8,15 +8,15 @@ import (
 
 // DiscoveryResult details the detected technical stack, manifests, and files in a target directory.
 type DiscoveryResult struct {
-	RepoPath     string   `json:"repo_path"`
-	TargetURL    string   `json:"target_url,omitempty"`
-	Languages    []string `json:"languages"`
-	Manifests    []string `json:"manifests"`
-	Lockfiles    []string `json:"lockfiles"`
-	IaCFiles     []string `json:"iac_files"`
-	EntryPoints  []string `json:"entry_points"`
-	HasGit       bool     `json:"has_git"`
-	TotalFiles   int      `json:"total_files"`
+	RepoPath    string   `json:"repo_path"`
+	TargetURL   string   `json:"target_url,omitempty"`
+	Languages   []string `json:"languages"`
+	Manifests   []string `json:"manifests"`
+	Lockfiles   []string `json:"lockfiles"`
+	IaCFiles    []string `json:"iac_files"`
+	EntryPoints []string `json:"entry_points"`
+	HasGit      bool     `json:"has_git"`
+	TotalFiles  int      `json:"total_files"`
 }
 
 // Discover analyzes the workspace path and detects applicable stacks, languages, and manifests.

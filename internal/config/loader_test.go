@@ -230,5 +230,3 @@ ignore:
 		t.Errorf("Missing expected audit warnings: %v", warnings)
 	}
 }
-
-

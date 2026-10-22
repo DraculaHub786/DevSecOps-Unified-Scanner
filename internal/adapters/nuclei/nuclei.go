@@ -111,6 +111,11 @@ func ParseOutput(data []byte, targetURL string, cfg *config.Config) ([]orchestra
 			continue
 		}
 
+		snippet := entry.Info.Name
+		if entry.MatchedAt != "" {
+			snippet = fmt.Sprintf("%s (%s)", entry.Info.Name, entry.MatchedAt)
+		}
+
 		f := orchestrator.Finding{
 			ID:          findingID,
 			Source:      "nuclei",
@@ -123,8 +128,10 @@ func ParseOutput(data []byte, targetURL string, cfg *config.Config) ([]orchestra
 			LineStart:   1,
 			LineEnd:     1,
 			Message:     fmt.Sprintf("%s: %s (Matched at: %s)", entry.Info.Name, entry.Info.Description, entry.MatchedAt),
+			Snippet:     snippet,
+			OWASP:       "A05:2021-Security Misconfiguration",
 			FirstSeen:   time.Now().UTC(),
-			Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategoryDAST, entry.TemplateID, targetURL, entry.Info.Name),
+			Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategoryDAST, entry.TemplateID, targetURL, snippet),
 		}
 		f.RiskScore = orchestrator.CalculateRiskScore(&f)
 		findings = append(findings, f)
@@ -191,8 +198,10 @@ func (a *NucleiAdapter) runPassiveNativeChecks(ctx context.Context, targetURL st
 				LineStart:   1,
 				LineEnd:     1,
 				Message:     "Missing Content-Security-Policy header in runtime HTTP response [Embedded Lite Check]",
+				Snippet:     "Content-Security-Policy: (missing)",
+				OWASP:       "A05:2021-Security Misconfiguration",
 				FirstSeen:   time.Now().UTC(),
-				Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategoryDAST, "missing-csp", targetURL, "csp"),
+				Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategoryDAST, "missing-csp", targetURL, "missing-csp"),
 			}
 			f.RiskScore = orchestrator.CalculateRiskScore(&f)
 			findings = append(findings, f)
@@ -215,8 +224,10 @@ func (a *NucleiAdapter) runPassiveNativeChecks(ctx context.Context, targetURL st
 				LineStart:   1,
 				LineEnd:     1,
 				Message:     "Missing Strict-Transport-Security (HSTS) header on HTTPS endpoint [Embedded Lite Check]",
+				Snippet:     "Strict-Transport-Security: (missing)",
+				OWASP:       "A05:2021-Security Misconfiguration",
 				FirstSeen:   time.Now().UTC(),
-				Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategoryDAST, "missing-hsts", targetURL, "hsts"),
+				Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategoryDAST, "missing-hsts", targetURL, "missing-hsts"),
 			}
 			f.RiskScore = orchestrator.CalculateRiskScore(&f)
 			findings = append(findings, f)

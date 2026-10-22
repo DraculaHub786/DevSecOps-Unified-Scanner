@@ -26,7 +26,6 @@ func TestGenerateSARIF(t *testing.T) {
 		},
 	}
 
-
 	data, err := GenerateSARIF(findings)
 	if err != nil {
 		t.Fatalf("failed to generate SARIF: %v", err)
@@ -59,4 +58,3 @@ func TestGenerateSARIF(t *testing.T) {
 		t.Errorf("expected primaryLocationLineHash in partialFingerprints")
 	}
 }
-

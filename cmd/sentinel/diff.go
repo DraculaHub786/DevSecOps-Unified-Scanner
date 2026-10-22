@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"github.com/spf13/cobra"
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/report"
+	"github.com/spf13/cobra"
 )
 
 func newDiffCmd() *cobra.Command {

@@ -3,6 +3,7 @@ package report
 import (
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"text/tabwriter"
 
@@ -10,7 +11,7 @@ import (
 )
 
 // ANSI color escape sequences
-const (
+var (
 	colorReset     = "\033[0m"
 	colorBold      = "\033[1m"
 	colorDim       = "\033[2m"
@@ -21,6 +22,25 @@ const (
 	colorCyan      = "\033[36m"
 	colorGray      = "\033[90m"
 )
+
+func init() {
+	if os.Getenv("NO_COLOR") != "" {
+		DisableColors()
+	}
+}
+
+// DisableColors strips all ANSI color codes from terminal output.
+func DisableColors() {
+	colorReset = ""
+	colorBold = ""
+	colorDim = ""
+	colorRed = ""
+	colorBrightRed = ""
+	colorYellow = ""
+	colorGreen = ""
+	colorCyan = ""
+	colorGray = ""
+}
 
 // RenderTerminal prints rich formatted scan findings to standard output.
 func RenderTerminal(w io.Writer, result *orchestrator.ScanResult, failOn string) {
@@ -63,6 +83,27 @@ func RenderTerminal(w io.Writer, result *orchestrator.ScanResult, failOn string)
 		fmt.Fprintf(w, "%s⚠️ Warnings:%s\n", colorYellow, colorReset)
 		for _, warn := range result.Warnings {
 			fmt.Fprintf(w, "  • %s%s%s\n", colorYellow, warn, colorReset)
+		}
+		fmt.Fprintln(w)
+	}
+
+	if len(result.Coverage) > 0 {
+		fmt.Fprintf(w, "%sCategory Coverage:%s\n", colorBold, colorReset)
+		for _, c := range result.Coverage {
+			statusColor := colorGreen
+			switch c.Status {
+			case "skipped":
+				statusColor = colorYellow
+			case "failed":
+				statusColor = colorRed
+			case "not-applicable":
+				statusColor = colorDim
+			}
+			detail := ""
+			if c.Detail != "" {
+				detail = fmt.Sprintf(" (%s)", c.Detail)
+			}
+			fmt.Fprintf(w, "  • %-12s [%s%s%s via %s]%s\n", c.Category, statusColor, strings.ToUpper(c.Status), colorReset, c.Engine, detail)
 		}
 		fmt.Fprintln(w)
 	}

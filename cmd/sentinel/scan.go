@@ -25,22 +25,26 @@ import (
 
 func newScanCmd() *cobra.Command {
 	var (
-		onlyCategories []string
-		skipCategories []string
-		targetURL      string
-		dastFlag       bool
-		resilienceFlag bool
-		ciMode         bool
-		allowLite      bool
-		useBaseline    bool
-		changedOnly    bool
-		failOn         string
-		formatStr      string
-		outFile        string
-		offline        bool
-		authorized     bool
-		configPath     string
-		repoPath       string
+		onlyCategories  []string
+		skipCategories  []string
+		targetURL       string
+		dastFlag        bool
+		resilienceFlag  bool
+		ciMode          bool
+		allowLite       bool
+		useBaseline     bool
+		changedOnly     bool
+		failOn          string
+		formatStr       string
+		outFile         string
+		authorized      bool
+		configPath      string
+		repoPath        string
+		sinceRef        string
+		showCoverage    bool
+		offline         bool
+		noColor         bool
+		trustRepoPolicy bool
 	)
 
 	cmd := &cobra.Command{
@@ -48,6 +52,9 @@ func newScanCmd() *cobra.Command {
 		Short: "Scan repository or directory for security vulnerabilities",
 		Args:  cobra.MaximumNArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
+			if noColor {
+				report.DisableColors()
+			}
 			if len(args) > 0 {
 				repoPath = args[0]
 			} else {
@@ -70,6 +77,8 @@ func newScanCmd() *cobra.Command {
 				targetURL,
 				offline,
 				authorized,
+				sinceRef,
+				trustRepoPolicy,
 			)
 		},
 	}
@@ -85,10 +94,14 @@ func newScanCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&allowLite, "allow-lite", false, "Allow embedded fallback engines to run in --ci mode without failing")
 	cmd.Flags().BoolVar(&useBaseline, "baseline", false, "Filter out accepted baseline findings from .sentinel/baseline.json")
 	cmd.Flags().BoolVar(&changedOnly, "changed-only", false, "Scan only modified and uncommitted files in git workspace")
+	cmd.Flags().StringVar(&sinceRef, "since", "", "Scan files changed since git ref or commit SHA (e.g. main, HEAD~1)")
+	cmd.Flags().BoolVar(&showCoverage, "show-coverage", true, "Show category coverage summary in report output")
 	cmd.Flags().StringVar(&failOn, "fail-on", "high", "Fail gating on severity: critical|high|medium|low")
-	cmd.Flags().StringVar(&formatStr, "format", "terminal", "Output formats (terminal,sarif,json,markdown,html)")
+	cmd.Flags().StringVar(&formatStr, "format", "terminal", "Output formats (terminal,sarif,json,markdown,html,junit)")
 	cmd.Flags().StringVar(&outFile, "out", "", "File path to write primary report output")
 	cmd.Flags().BoolVar(&offline, "offline", false, "Disable network requests")
+	cmd.Flags().BoolVar(&noColor, "no-color", false, "Disable ANSI color output in terminal")
+	cmd.Flags().BoolVar(&trustRepoPolicy, "trust-repo-policy", false, "In --ci, accept a .sentinel.yml found inside the scanned repository (default: refuse; use --config with a trusted policy)")
 
 	return cmd
 }
@@ -109,10 +122,20 @@ func runScanInternal(
 	targetURL string,
 	offline bool,
 	authorized bool,
+	sinceRef string,
+	trustRepoPolicy bool,
 ) {
 	absRepo, err := filepath.Abs(repoPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error resolving path: %v\n", err)
+		os.Exit(2)
+	}
+
+	// Policy that lives in the code under review is controlled by whoever wrote that
+	// code, so a CI gate must not obey it unless the caller says so explicitly.
+	if err := checkUntrustedPolicy(ciMode, configPath, trustRepoPolicy, absRepo); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v.\n", err)
+		fmt.Fprintln(os.Stderr, "Pass --config <policy from the protected base branch>, or --trust-repo-policy to accept this file.")
 		os.Exit(2)
 	}
 
@@ -124,6 +147,7 @@ func runScanInternal(
 			os.Exit(2)
 		}
 		cfg = loaded
+		fmt.Printf("Policy: %s\n", configPath)
 	} else {
 		loaded, err := config.Load(absRepo)
 		if err != nil {
@@ -152,7 +176,10 @@ func runScanInternal(
 		cfg.Scanners.DAST.Target = targetURL
 	}
 
-	if changedOnly && len(changedFiles) == 0 {
+	if sinceRef != "" {
+		changedOnly = true
+		changedFiles = detectGitChangedSince(absRepo, sinceRef)
+	} else if changedOnly && len(changedFiles) == 0 {
 		changedFiles = detectGitChangedFiles(absRepo)
 	}
 
@@ -212,9 +239,9 @@ func runScanInternal(
 		case "terminal":
 			report.RenderTerminal(os.Stdout, result, cfg.Thresholds.FailOn)
 		case "sarif":
-			sarifData, err := report.GenerateSARIF(result.Findings)
+			sarifData, err := report.GenerateSARIFWithCoverage(result.Findings, result.Coverage)
 			if err == nil {
-				if outFile != "" && strings.HasSuffix(outFile, ".sarif") {
+				if outFile != "" {
 					_ = os.WriteFile(outFile, sarifData, 0644)
 					fmt.Printf("SARIF report written to: %s\n", outFile)
 				} else {
@@ -226,14 +253,18 @@ func runScanInternal(
 		case "json":
 			jsonData, err := report.GenerateJSON(result)
 			if err == nil {
-				if outFile != "" && strings.HasSuffix(outFile, ".json") {
+				if outFile != "" {
 					_ = os.WriteFile(outFile, jsonData, 0644)
 					fmt.Printf("JSON report written to: %s\n", outFile)
+				} else {
+					defaultOut := filepath.Join(absRepo, ".sentinel", "reports", "results.json")
+					_ = os.MkdirAll(filepath.Dir(defaultOut), 0755)
+					_ = os.WriteFile(defaultOut, jsonData, 0644)
 				}
 			}
 		case "markdown", "md":
 			md := report.GenerateMarkdown(result, cfg.Thresholds.FailOn)
-			if outFile != "" && (strings.HasSuffix(outFile, ".md") || strings.HasSuffix(outFile, ".markdown")) {
+			if outFile != "" {
 				_ = os.WriteFile(outFile, []byte(md), 0644)
 				fmt.Printf("Markdown report written to: %s\n", outFile)
 			} else {
@@ -243,13 +274,25 @@ func runScanInternal(
 			}
 		case "html":
 			htmlContent := report.GenerateHTML(result, cfg.Thresholds.FailOn)
-			if outFile != "" && strings.HasSuffix(outFile, ".html") {
+			if outFile != "" {
 				_ = os.WriteFile(outFile, []byte(htmlContent), 0644)
 				fmt.Printf("HTML report written to: %s\n", outFile)
 			} else {
 				defaultOut := filepath.Join(absRepo, ".sentinel", "reports", "report.html")
 				_ = os.MkdirAll(filepath.Dir(defaultOut), 0755)
 				_ = os.WriteFile(defaultOut, []byte(htmlContent), 0644)
+			}
+		case "junit", "xml":
+			junitData, err := report.GenerateJUnit(result, cfg.Thresholds.FailOn)
+			if err == nil {
+				if outFile != "" {
+					_ = os.WriteFile(outFile, junitData, 0644)
+					fmt.Printf("JUnit report written to: %s\n", outFile)
+				} else {
+					defaultOut := filepath.Join(absRepo, ".sentinel", "reports", "junit.xml")
+					_ = os.MkdirAll(filepath.Dir(defaultOut), 0755)
+					_ = os.WriteFile(defaultOut, junitData, 0644)
+				}
 			}
 		}
 	}
@@ -276,11 +319,21 @@ func shouldFailGating(ciMode bool, failOn string, findings []orchestrator.Findin
 	return false
 }
 
+func checkUntrustedPolicy(ciMode bool, configPath string, trustRepoPolicy bool, absRepo string) error {
+	if ciMode && configPath == "" && !trustRepoPolicy {
+		if _, statErr := os.Stat(filepath.Join(absRepo, ".sentinel.yml")); statErr == nil {
+			return fmt.Errorf("--ci found .sentinel.yml inside the scanned repository. Policy from the code under review is untrusted")
+		}
+	}
+	return nil
+}
+
 func detectGitChangedFiles(repoPath string) []string {
 	cmd := exec.Command("git", "status", "--porcelain")
 	cmd.Dir = repoPath
 	out, err := cmd.Output()
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️ Warning: not a git repository or git command unavailable; falling back to full scan\n")
 		return nil
 	}
 
@@ -295,5 +348,37 @@ func detectGitChangedFiles(repoPath string) []string {
 			}
 		}
 	}
+	return changed
+}
+
+func detectGitChangedSince(repoPath, ref string) []string {
+	cmd := exec.Command("git", "diff", "--name-only", ref)
+	cmd.Dir = repoPath
+	out, err := cmd.Output()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️ Warning: git diff failed against ref %q; falling back to full scan\n", ref)
+		return nil
+	}
+
+	var changed []string
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			changed = append(changed, line)
+		}
+	}
+
+	// Also append untracked files
+	untrackedCmd := exec.Command("git", "ls-files", "--others", "--exclude-standard")
+	untrackedCmd.Dir = repoPath
+	if unOut, err := untrackedCmd.Output(); err == nil {
+		for _, line := range strings.Split(string(unOut), "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" {
+				changed = append(changed, line)
+			}
+		}
+	}
+
 	return changed
 }

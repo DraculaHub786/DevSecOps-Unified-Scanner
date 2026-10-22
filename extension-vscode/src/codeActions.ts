@@ -24,7 +24,7 @@ export class SentinelCodeActionProvider implements vscode.CodeActionProvider {
         const actions: vscode.CodeAction[] = [];
 
         for (const diagnostic of context.diagnostics) {
-            if (diagnostic.source !== 'Sentinel') {
+            if (!diagnostic.source || !diagnostic.source.startsWith('Sentinel')) {
                 continue;
             }
 
@@ -65,6 +65,30 @@ export class SentinelCodeActionProvider implements vscode.CodeActionProvider {
             };
             explainAction.diagnostics = [diagnostic];
             actions.push(explainAction);
+
+            // Suppress Action
+            const suppressAction = new vscode.CodeAction(
+                `Sentinel: Suppress this finding with justification`,
+                vscode.CodeActionKind.QuickFix
+            );
+            suppressAction.command = {
+                command: 'sentinel.suppressFinding',
+                title: 'Suppress Finding',
+                arguments: [finding.id]
+            };
+            suppressAction.diagnostics = [diagnostic];
+            actions.push(suppressAction);
+
+            // Baseline Action
+            const baselineAction = new vscode.CodeAction(
+                `Sentinel: Accept workspace findings into baseline`,
+                vscode.CodeActionKind.QuickFix
+            );
+            baselineAction.command = {
+                command: 'sentinel.createBaseline',
+                title: 'Accept Findings into Baseline'
+            };
+            actions.push(baselineAction);
         }
 
         return actions;

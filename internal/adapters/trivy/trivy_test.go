@@ -82,7 +82,6 @@ jobs:
 		t.Fatalf("runNativeFallback failed: %v", err)
 	}
 
-
 	foundPRTarget := false
 	foundWriteAll := false
 	foundUnpinned := false
@@ -118,3 +117,37 @@ jobs:
 	}
 }
 
+func TestTrivyDetectsFixtureIaCVulnerabilities(t *testing.T) {
+	fixturePath := filepath.Join("..", "..", "..", "testdata", "vulnerable-app")
+	if _, err := os.Stat(fixturePath); err != nil {
+		t.Skipf("Fixture directory %s not found: %v", fixturePath, err)
+	}
+
+	adapter := New()
+	cfg := config.DefaultConfig()
+	discovery, err := orchestrator.Discover(fixturePath)
+	if err != nil {
+		t.Fatalf("Discover failed: %v", err)
+	}
+
+	findings, err := adapter.runNativeFallback(fixturePath, cfg, discovery)
+	if err != nil {
+		t.Fatalf("runNativeFallback failed: %v", err)
+	}
+
+	foundRules := make(map[string]bool)
+	for _, f := range findings {
+		if f.Category != orchestrator.CategoryIaC {
+			t.Errorf("expected CategoryIaC, got %s", f.Category)
+		}
+		foundRules[f.Rule] = true
+	}
+
+	// In testdata/vulnerable-app: Dockerfile (AVD-DS-0001, AVD-DS-0002), main.tf (AVD-AWS-0107)
+	expectedRules := []string{"AVD-DS-0001", "AVD-DS-0002", "AVD-AWS-0107"}
+	for _, r := range expectedRules {
+		if !foundRules[r] {
+			t.Errorf("expected finding %s in fixture scan, but got rules: %v", r, foundRules)
+		}
+	}
+}

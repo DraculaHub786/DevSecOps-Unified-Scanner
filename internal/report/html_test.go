@@ -73,16 +73,41 @@ func TestGenerateHTML(t *testing.T) {
 		t.Error("HTML output should be 100% offline self-contained without external links")
 	}
 
-	// Test with warnings
+	// Test with warnings and script injection attempt (T-085)
 	result.Warnings = []string{"osv: embedded advisory list has 7 entries; install osv-scanner for full coverage"}
+	result.Coverage = []orchestrator.CoverageLine{
+		{Category: "sast", Engine: "semgrep", Status: "ran"},
+		{Category: "sca", Engine: "none", Status: "skipped", Detail: "no lockfile found; dependency scanning did not run"},
+	}
+	result.Findings = append(result.Findings, orchestrator.Finding{
+		ID:        "f-xss-test",
+		Category:  orchestrator.CategorySAST,
+		Severity:  "high",
+		File:      "vuln.js",
+		LineStart: 10,
+		Message:   `<script>alert("pwned")</script>`,
+		OWASP:     "A03:2021-Injection",
+	})
+
 	htmlWithWarn := GenerateHTML(result, "high")
 	if !strings.Contains(htmlWithWarn, "Scan Warnings") || !strings.Contains(htmlWithWarn, "embedded advisory list has 7 entries") {
 		t.Errorf("Expected scan warning banner in HTML report")
+	}
+	if strings.Contains(htmlWithWarn, `<script>alert("pwned")</script>`) {
+		t.Errorf("Unescaped script tag found in HTML report! Must be escaped")
+	}
+	if !strings.Contains(htmlWithWarn, `&lt;script&gt;alert(&#34;pwned&#34;)&lt;/script&gt;`) && !strings.Contains(htmlWithWarn, `&lt;script&gt;`) {
+		t.Errorf("Expected escaped script in HTML report")
+	}
+	if !strings.Contains(htmlWithWarn, "Category Coverage") || !strings.Contains(htmlWithWarn, "no lockfile found") {
+		t.Errorf("Expected category coverage in HTML report")
 	}
 
 	mdWithWarn := GenerateMarkdown(result, "high")
 	if !strings.Contains(mdWithWarn, "### ⚠️ Warnings") || !strings.Contains(mdWithWarn, "embedded advisory list has 7 entries") {
 		t.Errorf("Expected scan warning section in Markdown report")
 	}
+	if !strings.Contains(mdWithWarn, "Category Coverage") {
+		t.Errorf("Expected Category Coverage in Markdown report")
+	}
 }
-

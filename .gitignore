@@ -30,6 +30,7 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 extension-vscode/dist/
+*.vsix
 
 # Sentinel runtime local history & reports
 **/.sentinel/
@@ -72,3 +73,5 @@ ENV/
 Thumbs.db
 desktop.ini
 task.md
+sentinel-v5-blockers.patch
+Sentinel.md

@@ -39,6 +39,29 @@ func GenerateMarkdown(result *orchestrator.ScanResult, failOn string) string {
 	sb.WriteString(fmt.Sprintf("| **Low** | `%d` 🔵 |\n", result.Summary.Low))
 	sb.WriteString(fmt.Sprintf("| **Info** | `%d` ℹ️ |\n\n", result.Summary.Info))
 
+	if len(result.Coverage) > 0 {
+		sb.WriteString("### 🛡️ Category Coverage\n\n")
+		sb.WriteString("| Category | Status | Engine | Detail |\n")
+		sb.WriteString("| :--- | :--- | :--- | :--- |\n")
+		for _, c := range result.Coverage {
+			icon := "✅"
+			switch c.Status {
+			case "skipped":
+				icon = "⚠️"
+			case "failed":
+				icon = "❌"
+			case "not-applicable":
+				icon = "➖"
+			}
+			detail := c.Detail
+			if detail == "" {
+				detail = "-"
+			}
+			sb.WriteString(fmt.Sprintf("| `%s` | %s %s | `%s` | %s |\n", c.Category, icon, strings.ToUpper(c.Status), c.Engine, detail))
+		}
+		sb.WriteString("\n")
+	}
+
 	if len(result.Warnings) > 0 {
 		sb.WriteString("### ⚠️ Warnings\n\n")
 		for _, w := range result.Warnings {
@@ -53,8 +76,8 @@ func GenerateMarkdown(result *orchestrator.ScanResult, failOn string) string {
 	}
 
 	sb.WriteString("### 🔍 Security Findings\n\n")
-	sb.WriteString("| ID | Category | Severity | Rule / Advisory | Location | Risk Score | Fix Available |\n")
-	sb.WriteString("| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n")
+	sb.WriteString("| ID | Category | Severity | Rule / Advisory | Location | Risk Score | OWASP | Fix Available |\n")
+	sb.WriteString("| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n")
 
 	for _, f := range result.Findings {
 		fixBadge := "None"
@@ -81,8 +104,12 @@ func GenerateMarkdown(result *orchestrator.ScanResult, failOn string) string {
 			sevIcon = "ℹ️ Info"
 		}
 
-		sb.WriteString(fmt.Sprintf("| `%s` | `%s` | %s | `%s` | `%s:%d` | `%.1f` | %s |\n",
-			f.ID, f.Category, sevIcon, ref, f.File, f.LineStart, f.RiskScore, fixBadge))
+		owaspVal := f.OWASP
+		if owaspVal == "" {
+			owaspVal = "-"
+		}
+		sb.WriteString(fmt.Sprintf("| `%s` | `%s` | %s | `%s` | `%s:%d` | `%.1f` | `%s` | %s |\n",
+			f.ID, f.Category, sevIcon, ref, f.File, f.LineStart, f.RiskScore, owaspVal, fixBadge))
 	}
 
 	sb.WriteString("\n### 🛠️ Remediation Guidance\n\n")

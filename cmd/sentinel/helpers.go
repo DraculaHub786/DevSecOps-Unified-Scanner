@@ -19,6 +19,7 @@ import (
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/adapters/semgrep"
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/adapters/trivy"
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/config"
+	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/doctor"
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/orchestrator"
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/report"
 )
@@ -278,8 +279,18 @@ func newVersionCmd() *cobra.Command {
 		Use:   "version",
 		Short: "Print Sentinel version and scanner engine availability",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Printf("Sentinel DevSecOps Unified Scanner v%s (commit: %s, built: %s)\n\n", version, commit, date)
-			fmt.Println("Use 'sentinel doctor' for deep scanner engine diagnostics and versions.")
+			fmt.Printf("Sentinel DevSecOps Unified Scanner v%s (commit: %s, built: %s)\n", version, commit, date)
+			fmt.Println("Rules: embedded v1 (40 SAST rules, 4 resilience rules)")
+			fmt.Println("\nDetected Scanner Engines:")
+			statuses := doctor.CheckEngines()
+			for _, s := range statuses {
+				ver := s.Version
+				if ver == "" {
+					ver = "none"
+				}
+				fmt.Printf("  • %-12s: %-10s (%s)\n", s.Name, ver, s.Mode)
+			}
+			fmt.Println("\nUse 'sentinel doctor' for deep diagnostics, paths, and pinned version comparison.")
 		},
 	}
 }

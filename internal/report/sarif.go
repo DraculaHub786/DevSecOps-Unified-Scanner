@@ -17,8 +17,9 @@ type SARIFReport struct {
 }
 
 type SARIFRun struct {
-	Tool      SARIFTool     `json:"tool"`
-	Results   []SARIFResult `json:"results"`
+	Tool       SARIFTool              `json:"tool"`
+	Results    []SARIFResult          `json:"results"`
+	Properties map[string]interface{} `json:"properties,omitempty"`
 }
 
 type SARIFTool struct {
@@ -68,7 +69,7 @@ type SARIFPhysicalLocation struct {
 }
 
 type SARIFArtifactLocation struct {
-	URI   string `json:"uri"`
+	URI       string `json:"uri"`
 	URIBaseID string `json:"uriBaseId,omitempty"`
 }
 
@@ -80,6 +81,11 @@ type SARIFRegion struct {
 
 // GenerateSARIF converts normalized Sentinel findings into valid SARIF 2.1.0 JSON.
 func GenerateSARIF(findings []orchestrator.Finding) ([]byte, error) {
+	return GenerateSARIFWithCoverage(findings, nil)
+}
+
+// GenerateSARIFWithCoverage converts normalized findings and coverage into valid SARIF 2.1.0 JSON (T-045, T-047).
+func GenerateSARIFWithCoverage(findings []orchestrator.Finding, coverage []orchestrator.CoverageLine) ([]byte, error) {
 	ruleMap := make(map[string]SARIFRule)
 	var results []SARIFResult
 
@@ -92,6 +98,14 @@ func GenerateSARIF(findings []orchestrator.Finding) ([]byte, error) {
 		level := sarifLevel(f.Severity)
 
 		if _, exists := ruleMap[ruleID]; !exists {
+			ruleProps := map[string]string{
+				"category": f.Category,
+				"cwe":      f.CWE,
+				"cve":      f.CVE,
+			}
+			if f.OWASP != "" {
+				ruleProps["owasp"] = f.OWASP
+			}
 			ruleMap[ruleID] = SARIFRule{
 				ID:   ruleID,
 				Name: f.Rule,
@@ -101,11 +115,7 @@ func GenerateSARIF(findings []orchestrator.Finding) ([]byte, error) {
 				DefaultConfiguration: SARIFRuleConfig{
 					Level: level,
 				},
-				Properties: map[string]string{
-					"category": f.Category,
-					"cwe":      f.CWE,
-					"cve":      f.CVE,
-				},
+				Properties: ruleProps,
 			}
 		}
 
@@ -162,6 +172,11 @@ func GenerateSARIF(findings []orchestrator.Finding) ([]byte, error) {
 		rules = append(rules, r)
 	}
 
+	runProps := make(map[string]interface{})
+	if len(coverage) > 0 {
+		runProps["coverage"] = coverage
+	}
+
 	report := SARIFReport{
 		Schema:  "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
 		Version: "2.1.0",
@@ -175,8 +190,8 @@ func GenerateSARIF(findings []orchestrator.Finding) ([]byte, error) {
 						Rules:          rules,
 					},
 				},
-
-				Results: results,
+				Results:    results,
+				Properties: runProps,
 			},
 		},
 	}

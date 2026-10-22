@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/spf13/cobra"
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/adapters/gitleaks"
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/adapters/osv"
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/adapters/resilience"
@@ -17,6 +16,7 @@ import (
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/config"
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/orchestrator"
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/threatmodel"
+	"github.com/spf13/cobra"
 )
 
 func newThreatModelCmd() *cobra.Command {

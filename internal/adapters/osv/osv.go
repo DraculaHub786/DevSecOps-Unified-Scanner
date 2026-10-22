@@ -52,13 +52,13 @@ type osvScanOutput struct {
 				Version   string `json:"version"`
 				Ecosystem string `json:"ecosystem"`
 			} `json:"package"`
-			License  string   `json:"license,omitempty"`
-			Licenses []string `json:"licenses,omitempty"`
+			License         string   `json:"license,omitempty"`
+			Licenses        []string `json:"licenses,omitempty"`
 			Vulnerabilities []struct {
-				ID      string   `json:"id"`
-				Summary string   `json:"summary"`
-				Details string   `json:"details"`
-				Aliases []string `json:"aliases"`
+				ID         string   `json:"id"`
+				Summary    string   `json:"summary"`
+				Details    string   `json:"details"`
+				Aliases    []string `json:"aliases"`
 				Severities []struct {
 					Type  string `json:"type"`
 					Score string `json:"score"`
@@ -85,12 +85,23 @@ func (a *OSVAdapter) Run(ctx context.Context, repoPath string, cfg *config.Confi
 }
 
 func (a *OSVAdapter) runCLI(ctx context.Context, binPath, repoPath string, cfg *config.Config, discovery *orchestrator.DiscoveryResult) ([]orchestrator.Finding, error) {
+	if cfg.Offline {
+		return nil, fmt.Errorf("%w: osv-scanner needs the OSV advisory database in --offline mode", orchestrator.ErrSkipped)
+	}
+
 	toolRes, err := adapters.RunTool(ctx, binPath, "--format", "json", "-r", repoPath)
 	if err != nil {
 		return nil, fmt.Errorf("osv-scanner failed to execute: %w", err)
 	}
 
-	// OSV-scanner returns 0 for clean, 1 when vulnerabilities are identified. 2+ is error.
+	// OSV-scanner returns 0 for clean, 1 when vulnerabilities are identified.
+	// Exit code 128 or specific message indicates no lockfile or package source was found (T-046)
+	combinedOutput := strings.ToLower(string(toolRes.Stderr) + string(toolRes.Stdout))
+	if toolRes.ExitCode == 128 || strings.Contains(combinedOutput, "no package sources found") {
+		return nil, fmt.Errorf("%w: no lockfile found; dependency scanning did not run", orchestrator.ErrSkipped)
+	}
+
+	// 2+ is scanner runtime failure
 	if toolRes.ExitCode >= 2 {
 		errLine := strings.TrimSpace(string(toolRes.Stderr))
 		return nil, fmt.Errorf("osv-scanner exited with error %d: %s", toolRes.ExitCode, errLine)
@@ -132,6 +143,7 @@ func (a *OSVAdapter) ParseOutput(data []byte, repoPath string, cfg *config.Confi
 			if isDisallowedLicense(pkgLicense, cfg.Scanners.SCA.FailOnLicense) {
 				licID := orchestrator.GenerateID("license", pkgLicense, relFile, 1)
 				if !cfg.ShouldIgnoreFinding(licID) {
+					snippet := fmt.Sprintf("%s (%s)", pkg.Package.Name, pkgLicense)
 					lf := orchestrator.Finding{
 						ID:          licID,
 						Source:      "osv",
@@ -144,8 +156,10 @@ func (a *OSVAdapter) ParseOutput(data []byte, repoPath string, cfg *config.Confi
 						LineStart:   1,
 						LineEnd:     1,
 						Message:     fmt.Sprintf("Dependency %s uses forbidden license %q (configured in scanners.sca.fail_on_license)", pkg.Package.Name, pkgLicense),
+						Snippet:     snippet,
+						OWASP:       "A06:2021-Vulnerable and Outdated Components",
 						FirstSeen:   time.Now().UTC(),
-						Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategorySCA, "license", relFile, pkg.Package.Name),
+						Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategorySCA, "license", relFile, snippet),
 					}
 					lf.RiskScore = orchestrator.CalculateRiskScore(&lf)
 					findings = append(findings, lf)
@@ -179,6 +193,7 @@ func (a *OSVAdapter) ParseOutput(data []byte, repoPath string, cfg *config.Confi
 					msg = fmt.Sprintf("%s [Reachability: heuristic]", msg)
 				}
 
+				snippet := fmt.Sprintf("%s@%s", pkg.Package.Name, pkg.Package.Version)
 				f := orchestrator.Finding{
 					ID:          findingID,
 					Source:      "osv",
@@ -193,9 +208,11 @@ func (a *OSVAdapter) ParseOutput(data []byte, repoPath string, cfg *config.Confi
 					LineStart:   1,
 					LineEnd:     1,
 					Message:     msg,
+					Snippet:     snippet,
+					OWASP:       "A06:2021-Vulnerable and Outdated Components",
 					Reachable:   &reachable,
 					FirstSeen:   time.Now().UTC(),
-					Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategorySCA, cve, relFile, pkg.Package.Name),
+					Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategorySCA, cve, relFile, snippet),
 				}
 				f.RiskScore = orchestrator.CalculateRiskScore(&f)
 				f.FixSuggestion = orchestrator.GenerateRemediation(repoPath, &f)
@@ -234,6 +251,10 @@ func isDisallowedLicense(lic string, disallowed []string) bool {
 }
 
 func (a *OSVAdapter) runNativeFallback(repoPath string, cfg *config.Config, discovery *orchestrator.DiscoveryResult) ([]orchestrator.Finding, error) {
+	if discovery == nil || len(discovery.Manifests) == 0 {
+		return nil, fmt.Errorf("%w: no lockfile found; dependency scanning did not run", orchestrator.ErrSkipped)
+	}
+
 	vulnDB := []knownVuln{
 		{
 			Ecosystem:   "npm",
@@ -468,6 +489,7 @@ func (a *OSVAdapter) runNativeFallback(repoPath string, cfg *config.Config, disc
 						if isDisallowedLicense(dbEntry.License, cfg.Scanners.SCA.FailOnLicense) {
 							licID := orchestrator.GenerateID("license", dbEntry.License, manifest, idx+1)
 							if !cfg.ShouldIgnoreFinding(licID) {
+								snippet := fmt.Sprintf("%s (%s)", dbEntry.Package, dbEntry.License)
 								lf := orchestrator.Finding{
 									ID:          licID,
 									Source:      "osv",
@@ -480,8 +502,10 @@ func (a *OSVAdapter) runNativeFallback(repoPath string, cfg *config.Config, disc
 									LineStart:   idx + 1,
 									LineEnd:     idx + 1,
 									Message:     fmt.Sprintf("Dependency %s uses forbidden license %q (configured in scanners.sca.fail_on_license)", dbEntry.Package, dbEntry.License),
+									Snippet:     snippet,
+									OWASP:       "A06:2021-Vulnerable and Outdated Components",
 									FirstSeen:   time.Now().UTC(),
-									Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategorySCA, "license", manifest, dbEntry.Package),
+									Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategorySCA, "license", manifest, snippet),
 								}
 								lf.RiskScore = orchestrator.CalculateRiskScore(&lf)
 								findings = append(findings, lf)
@@ -495,6 +519,7 @@ func (a *OSVAdapter) runNativeFallback(repoPath string, cfg *config.Config, disc
 							if cfg.ShouldIgnoreFinding(findingID) {
 								continue
 							}
+							snippet := fmt.Sprintf("%s@%s", dbEntry.Package, ver)
 							f := orchestrator.Finding{
 								ID:          findingID,
 								Source:      "osv",
@@ -509,9 +534,11 @@ func (a *OSVAdapter) runNativeFallback(repoPath string, cfg *config.Config, disc
 								LineStart:   idx + 1,
 								LineEnd:     idx + 1,
 								Message:     fmt.Sprintf("%s (%s@%s) - Upgrade package to %s [Reachability: heuristic] [Embedded Lite Engine: install osv-scanner for full advisory coverage]", dbEntry.Description, dbEntry.Package, ver, dbEntry.FixedVer),
+								Snippet:     snippet,
+								OWASP:       "A06:2021-Vulnerable and Outdated Components",
 								Reachable:   &reachable,
 								FirstSeen:   time.Now().UTC(),
-								Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategorySCA, dbEntry.CVE, manifest, dbEntry.Package),
+								Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategorySCA, dbEntry.CVE, manifest, snippet),
 							}
 							f.RiskScore = orchestrator.CalculateRiskScore(&f)
 							f.FixSuggestion = orchestrator.GenerateRemediation(repoPath, &f)
@@ -533,6 +560,7 @@ func (a *OSVAdapter) runNativeFallback(repoPath string, cfg *config.Config, disc
 						if isDisallowedLicense(dbEntry.License, cfg.Scanners.SCA.FailOnLicense) {
 							licID := orchestrator.GenerateID("license", dbEntry.License, manifest, idx+1)
 							if !cfg.ShouldIgnoreFinding(licID) {
+								snippet := fmt.Sprintf("%s (%s)", dbEntry.Package, dbEntry.License)
 								lf := orchestrator.Finding{
 									ID:          licID,
 									Source:      "osv",
@@ -545,8 +573,10 @@ func (a *OSVAdapter) runNativeFallback(repoPath string, cfg *config.Config, disc
 									LineStart:   idx + 1,
 									LineEnd:     idx + 1,
 									Message:     fmt.Sprintf("Dependency %s uses forbidden license %q (configured in scanners.sca.fail_on_license)", dbEntry.Package, dbEntry.License),
+									Snippet:     snippet,
+									OWASP:       "A06:2021-Vulnerable and Outdated Components",
 									FirstSeen:   time.Now().UTC(),
-									Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategorySCA, "license", manifest, dbEntry.Package),
+									Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategorySCA, "license", manifest, snippet),
 								}
 								lf.RiskScore = orchestrator.CalculateRiskScore(&lf)
 								findings = append(findings, lf)
@@ -560,6 +590,7 @@ func (a *OSVAdapter) runNativeFallback(repoPath string, cfg *config.Config, disc
 							if cfg.ShouldIgnoreFinding(findingID) {
 								continue
 							}
+							snippet := fmt.Sprintf("%s==%s", dbEntry.Package, ver)
 							f := orchestrator.Finding{
 								ID:          findingID,
 								Source:      "osv",
@@ -574,9 +605,11 @@ func (a *OSVAdapter) runNativeFallback(repoPath string, cfg *config.Config, disc
 								LineStart:   idx + 1,
 								LineEnd:     idx + 1,
 								Message:     fmt.Sprintf("%s (%s==%s) - Upgrade package to %s [Reachability: heuristic] [Embedded Lite Engine: install osv-scanner for full advisory coverage]", dbEntry.Description, dbEntry.Package, ver, dbEntry.FixedVer),
+								Snippet:     snippet,
+								OWASP:       "A06:2021-Vulnerable and Outdated Components",
 								Reachable:   &reachable,
 								FirstSeen:   time.Now().UTC(),
-								Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategorySCA, dbEntry.CVE, manifest, dbEntry.Package),
+								Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategorySCA, dbEntry.CVE, manifest, snippet),
 							}
 							f.RiskScore = orchestrator.CalculateRiskScore(&f)
 							f.FixSuggestion = orchestrator.GenerateRemediation(repoPath, &f)
@@ -610,11 +643,31 @@ func (a *OSVAdapter) checkReachability(pkgName, repoPath string) bool {
 		ext := strings.ToLower(filepath.Ext(path))
 		if ext == ".js" || ext == ".ts" || ext == ".py" || ext == ".go" {
 			data, err := os.ReadFile(path)
-			if err == nil && strings.Contains(string(data), pkgName) {
+			if err == nil && isPackageImported(pkgName, string(data), ext) {
 				found = true
 			}
 		}
 		return nil
 	})
 	return found
+}
+
+func isPackageImported(pkgName, content, ext string) bool {
+	escaped := regexp.QuoteMeta(pkgName)
+	switch ext {
+	case ".js", ".ts":
+		// require('pkg'), require("pkg"), import ... from 'pkg', import('pkg')
+		re := regexp.MustCompile(`(?m)(?:require\s*\(\s*['"]|import\s+.*?from\s+['"]|import\s*\(\s*['"])(?:@[^'"\/]+\/)?` + escaped + `(?:['"\/])`)
+		return re.MatchString(content)
+	case ".py":
+		// import pkg, from pkg import ...
+		re := regexp.MustCompile(`(?m)(?:^\s*import\s+` + escaped + `\b|^\s*from\s+` + escaped + `\b)`)
+		return re.MatchString(content)
+	case ".go":
+		// import "pkg" or "github.com/.../pkg"
+		re := regexp.MustCompile(`(?m)["'](?:[a-zA-Z0-9_\-\.\/]+\/)?` + escaped + `["']`)
+		return re.MatchString(content)
+	default:
+		return strings.Contains(content, pkgName)
+	}
 }

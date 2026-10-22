@@ -124,6 +124,47 @@ func GenerateHTML(result *orchestrator.ScanResult, failOn string) string {
 `)
 	}
 
+	if len(result.Coverage) > 0 {
+		sb.WriteString(`  <h2>🛡️ Category Coverage</h2>
+  <table style="margin-bottom: 28px;">
+    <thead>
+      <tr>
+        <th>Category</th>
+        <th>Status</th>
+        <th>Engine</th>
+        <th>Detail</th>
+      </tr>
+    </thead>
+    <tbody>
+`)
+		for _, c := range result.Coverage {
+			statusBg := "rgba(16, 185, 129, 0.2)"
+			statusCol := "#6ee7b7"
+			if c.Status == "skipped" {
+				statusBg = "rgba(234, 179, 8, 0.2)"
+				statusCol = "#fde047"
+			} else if c.Status == "failed" {
+				statusBg = "rgba(239, 68, 68, 0.2)"
+				statusCol = "#fca5a5"
+			} else if c.Status == "not-applicable" {
+				statusBg = "rgba(148, 163, 184, 0.2)"
+				statusCol = "#94a3b8"
+			}
+			detail := c.Detail
+			if detail == "" {
+				detail = "-"
+			}
+			sb.WriteString(fmt.Sprintf(`      <tr>
+        <td><b>%s</b></td>
+        <td><span class="badge" style="background: %s; color: %s;">%s</span></td>
+        <td><code>%s</code></td>
+        <td style="color: var(--text-muted);">%s</td>
+      </tr>
+`, html.EscapeString(c.Category), statusBg, statusCol, html.EscapeString(strings.ToUpper(c.Status)), html.EscapeString(c.Engine), html.EscapeString(detail)))
+		}
+		sb.WriteString("    </tbody>\n  </table>\n")
+	}
+
 	sb.WriteString(`  <h2>Security Findings</h2>
   <table>
     <thead>
@@ -131,6 +172,7 @@ func GenerateHTML(result *orchestrator.ScanResult, failOn string) string {
         <th>Severity</th>
         <th>ID</th>
         <th>Category</th>
+        <th>OWASP</th>
         <th>Engine</th>
         <th>File & Location</th>
         <th>Risk Score</th>
@@ -141,14 +183,25 @@ func GenerateHTML(result *orchestrator.ScanResult, failOn string) string {
 `)
 
 	if len(result.Findings) == 0 {
-		sb.WriteString(`<tr><td colspan="7" style="text-align: center; padding: 32px; color: #10b981;">🎉 Clean repository! Zero security flaws identified.</td></tr>`)
+		sb.WriteString(`<tr><td colspan="8" style="text-align: center; padding: 32px; color: #10b981;">🎉 Clean repository! Zero security flaws identified.</td></tr>`)
 	} else {
 		for _, f := range result.Findings {
 			sevClass := "sev-" + strings.ToLower(f.Severity)
+			owaspTag := "-"
+			if f.OWASP != "" {
+				owaspTag = fmt.Sprintf(`<span class="badge" style="background: #334155; color: #93c5fd; font-size: 11px;">%s</span>`, html.EscapeString(f.OWASP))
+			}
+			fixHTML := ""
+			if f.FixSuggestion != nil {
+				fixHTML = fmt.Sprintf(`<div style="margin-top: 6px; font-size: 12px; color: #a5b4fc;"><b>💡 Fix (%s):</b> %s</div>`,
+					html.EscapeString(f.FixSuggestion.Kind), html.EscapeString(f.FixSuggestion.Description))
+			}
+
 			sb.WriteString(fmt.Sprintf(`
       <tr>
         <td><span class="sev-pill %s">%s</span></td>
         <td><code>%s</code></td>
+        <td>%s</td>
         <td>%s</td>
         <td>%s</td>
         <td><code>%s:%d</code></td>
@@ -156,16 +209,19 @@ func GenerateHTML(result *orchestrator.ScanResult, failOn string) string {
         <td>
           <b>%s</b>
           <div class="meta">%s</div>
+          %s
         </td>
       </tr>`,
 				sevClass, html.EscapeString(f.Severity),
 				html.EscapeString(f.ID),
 				html.EscapeString(f.Category),
+				owaspTag,
 				html.EscapeString(f.Engine),
 				html.EscapeString(f.File), f.LineStart,
 				f.RiskScore,
 				html.EscapeString(f.Rule),
 				html.EscapeString(f.Message),
+				fixHTML,
 			))
 		}
 	}

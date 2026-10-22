@@ -80,3 +80,38 @@ func TestRedactSecret(t *testing.T) {
 	}
 }
 
+func TestGitleaksDetectsSyntheticFixtureSecrets(t *testing.T) {
+	fixturePath := filepath.Join("..", "..", "..", "testdata", "vulnerable-app")
+	if _, err := os.Stat(fixturePath); err != nil {
+		t.Skipf("Fixture directory %s not found: %v", fixturePath, err)
+	}
+
+	adapter := New()
+	cfg := config.DefaultConfig()
+	findings, err := adapter.runNativeFallback(fixturePath, cfg)
+	if err != nil {
+		t.Fatalf("runNativeFallback failed: %v", err)
+	}
+
+	foundRules := make(map[string]bool)
+	for _, f := range findings {
+		if f.Category != orchestrator.CategorySecret {
+			t.Errorf("expected CategorySecret, got %s", f.Category)
+		}
+		foundRules[f.Rule] = true
+	}
+
+	requiredRules := []string{
+		"aws-access-key-id",
+		"aws-secret-access-key",
+		"github-pat",
+		"slack-token",
+		"slack-webhook",
+	}
+
+	for _, rule := range requiredRules {
+		if !foundRules[rule] {
+			t.Errorf("expected synthetic fixture to trigger secret rule %q, but it was not found in %v", rule, foundRules)
+		}
+	}
+}
