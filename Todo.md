@@ -1,753 +1,527 @@
-# Sentinel V2 Master Plan
+# Sentinel V4 Completion Plan
 
-DevSecOps Unified Scanner: review of the current repo and the roadmap to a publishable v1.0
+What is done, what is left, and the order to finish it
 
-*Based on a clone of github.com/DraculaHub786/DevSecOps-Unified-Scanner. Code was read, not compiled or run (Go was not available in the review sandbox, and go.mod requires 1.27).*
+*Reviewed at commit d0a326f (v0.1.1) with a real build and real Semgrep 1.182.0, Gitleaks 8.30.1, Trivy 0.76.0 and OSV-Scanner 2.7.0. Supersedes V3 as the working plan; V3 stays as the detailed work-order reference (WO-V3-nn).*
 
-## What the code actually does
+## 1. Verdict
 
-**Good:**
+**Goal:** a CLI plus VS Code extension that finds as many threats and weaknesses as possible before code is deployed or pushed, and shows developers where the gap is.
 
-- Every adapter calls the real tool when it is in PATH, using argument arrays, not shell strings.
-- The scheduler has a 90s overall timeout and 60s per adapter.
-- Nuclei runs with `-passive` and only when `--dast` and a target are given.
-- The agent binds to `127.0.0.1`.
+**Where you are:** the structure, commands and extension exist and build. The detection layer underneath them is not yet trustworthy, so the product does not yet deliver the goal. My estimate is that about 40% of the work to a credible v1.0 is done. Most of what remains is correctness, detection depth and proof, not new commands.
 
-**Problems to fix before anything else:**
+What changed since V3 (commits after e655ae0): CI-only gating, Go 1.27.2, a Docker-based Action pointing at `ghcr.io/draculahub786/devsecops-unified-scanner:v0.1.1`, `fail_on_license` enforcement with license metadata, config threshold validation, a Python fixture, untracked scanner binaries, and extension README and metadata. `sentinel-v2-hardening.patch` was **not** applied: every one of its 12 fixes is still open, and the patch still applies cleanly to d0a326f.
 
-1. **Silent fallback hides what ran.** When a tool is not installed, an embedded regex engine runs instead, but findings are still labeled `Source: "semgrep"` or `"gitleaks"`. The OSV fallback is a hardcoded list of about 6 CVEs (lodash, axios, express, requests, urllib3). That explains the "under 30 ms" README claim, and it would mislead users.
-2. **Errors are swallowed.** Semgrep parses `CombinedOutput()` (stderr mixed into the JSON), so any warning breaks parsing and drops into fallback unnoticed. Nuclei and Gitleaks ignore exit errors too, and Nuclei falls back to native checks whenever the real run finds zero issues.
-3. **The GitHub Action cannot work as written.** It runs `go install github.com/DraculaHub786/DevSecOps-Unified-Scanner/...@latest`, but the module path is not the repo path, and the Action uses Go 1.24 while `go.mod` says 1.27.
-4. **`go.mod` marks every dependency `// indirect`.** Run `go mod tidy`.
-5. **`testdata/vulnerable-app/.sentinel/history.db` is tracked** despite the `.gitignore`.
-6. **No authorization guard on DAST.** There is no `--i-have-authorization`, no allowlist and no private-IP block, which the spec promised.
-7. **Thin tests and no CI.** Only 3 tests, none for adapters, no `.github/workflows`, and no LICENSE.
-8. **The installer downloads with `curl | tar` and no checksum.** The pinned versions (Gitleaks 8.18.4, OSV 1.8.2, Trivy 0.51.0) look dated, so verify them before relying on them.
+### Real scan of the fixture at HEAD
 
-## V2 principle
-
-**Real engines are the product. Embedded fallbacks are a clearly labeled "lite mode".** Every finding carries `engine: external|embedded`, and the report header states which mode ran. In `--ci` mode, a missing tool is an error (exit 2) unless the user passes `--allow-lite`.
-
-## V2 command set
-
-| Command | Purpose |
+| Item | Result |
 | --- | --- |
-| `scan` | Everything applicable, with `--only`, `--skip`, `--changed-only` |
-| `secrets`, `deps`, `sast`, `iac` | Single-category shortcuts |
-| `image <name>` | Container image scan (`trivy image`) |
-| `sbom` | CycloneDX/SPDX output |
-| `dast --target URL` | Passive by default; active needs `--i-have-authorization` plus an allowlist |
-| `threat-model` | Entry points, trust boundaries, STRIDE/OWASP mapping |
-| `baseline` | Accept current findings, so only new ones fail |
-| `diff <a> <b>`, `history` | New vs fixed findings between scans |
-| `report <id> --format sarif\|md\|html\|json` | Re-render stored scans |
-| `suppress <id> --reason` | Suppression with a required justification |
-| `doctor` | Tool presence, versions, mode (external or lite) |
-| `explain`, `fix`, `watch`, `install-hooks`, `version` | Already built |
+| Findings | 8 (5 IaC from Trivy, 3 resilience). SAST 0, secrets 0, SCA 0 |
+| Semgrep | Fails with exit 2 (`--config auto` with `--metrics=off`) |
+| OSV-Scanner | Exit 127 in the review sandbox (no network); re-test online |
+| `--offline` | Still does nothing; scan took 20s because Semgrep stalls |
+| `doctor` | Every tool shows 'version check returned empty' |
+| Policy bypass | A pull request that adds `.sentinel.yml` with `fail_on: critical` and a path ignore list turned the same scan into exit 0 with zero findings |
 
-## Phases
+## 2. Against the original plan
 
-### Phase 0: Hygiene (days 1-2)
+### Functional requirements (FR-1 to FR-20)
 
-- Fix the module path, run `go mod tidy`, align Go versions, and `git rm --cached` the history.db.
-- Add LICENSE, SECURITY.md, a repo description and topics, and move the build guide into `docs/`.
-- *Done when:* `go build ./... && go test ./...` passes on a clean machine.
-
-### Phase 1: Honest engines (week 1)
-
-- Add the `engine` field and the labeled-fallback behavior.
-- Separate stdout from stderr and check exit codes (Semgrep 0/1 are fine, 2+ is an error).
-- Add `--redact` to Gitleaks, and stop falling back to native when the real tool simply found nothing.
-- Add `doctor` and golden-file parser tests using recorded real tool output for all five adapters.
-- *Done when:* a scan with tools installed shows only `engine: external` findings, and one without them warns loudly.
-
-### Phase 2: Coverage (weeks 2-3)
-
-- Trivy image and SBOM, plus license enforcement (`fail_on_license` is config-only today).
-- GitHub Actions workflow rules (unpinned actions, `pull_request_target`, broad permissions).
-- Basic supply-chain checks: unpinned or typosquat-looking dependencies.
-- Make reachability real. Today `checkReachability` is a heuristic, so label it as one.
-- *Done when:* `testdata/` has one vulnerable fixture per language and tests assert expected counts per category.
-
-### Phase 3: Workflow (weeks 3-4)
-
-- `baseline`, `diff` and `history` on the existing SQLite store, plus an HTML report.
-- Suppressions with required reasons and optional expiry.
-- A `.github/workflows` pipeline: vet, test, cross-compile, a SARIF schema check, an egress test (default scan works with network blocked), and a self-scan gate.
-- *Done when:* a PR that adds one new vulnerability fails and an old one does not.
-
-### Phase 4: Threat analysis and safety (weeks 4-5)
-
-- `threat-model` rule-based first. Optional LLM explanation later, off by default, clearly labeled, never uploading code without opt-in.
-- DAST guardrails: authorization flag, allowlist in `.sentinel.yml`, refusal on private/loopback/metadata IPs unless explicitly allowed, rate cap, and an authorized-use notice.
-- Keep resilience checks static only. No load generation.
-
-### Phase 5: Ship (weeks 5-6)
-
-- goreleaser for releases, a Docker image with pinned and checksum-verified scanners, and a fixed Action that uses the container or release binary.
-- Finish the VS Code extension and publish it, then a Homebrew tap and a GitHub Pages docs site.
-- Cloud, domain and the SaaS dashboard come after v1.0, and only if people actually use local mode.
-
-## Publish gates (all must pass)
-
-- Gitleaks over the full git history finds no real secrets, and the fixture's fake secrets are clearly labeled.
-- The README makes no claim the code does not back, including the speed number.
-- CI is green and the self-scan passes.
-- A fresh-machine install from the release works end to end.
-
-## Suggested start
-
-Phase 0 plus the Phase 1 labeling and error-handling fixes are one focused pass of roughly 300-400 lines changed. Start with the `engine` field and the Semgrep and Gitleaks error handling.
-
-## Part 2: Work orders
-
-Use this part while you code. Work top to bottom. Each work order (WO) lists the files, the change, and a done condition. Commit once per WO with a conventional message (`fix:`, `feat:`, `chore:`, `docs:`, `test:`). Do not start the next WO until `go build ./... && go test ./...` passes. Code for the key changes is in Part 3.
-
-### Tech and version updates
-
-Re-check every version on the day you pin it. The numbers below may have moved.
-
-| Item | Now in repo | Action |
+| FR | Requirement | State at HEAD |
 | --- | --- | --- |
-| Go module path | `github.com/DraculaHub786/DevSecOps-Unified-Scanner` | Rename to `github.com/DraculaHub786/DevSecOps-Unified-Scanner` so `go install` and the Action work (WO-01). |
-| Go version | `go 1.27.0` in go.mod, Go 1.24 in the Action | Set the directive to the version you build with (`go version`). In CI use `go-version-file: go.mod`. |
-| Dependencies | every require is marked `// indirect` | Run `go mod tidy`. Add `govulncheck` and `golangci-lint` to CI. |
-| Gitleaks | 8.18.4 in `plugins/install.*` | Bump to a current release (8.30.1 was current in spring 2026; check the releases page). Run with `--redact`. Newer releases add `gitleaks git` and `gitleaks dir`; confirm whether `detect` still works for your pinned version. |
-| OSV-Scanner | 1.8.2 | Decide v1 or v2. v2 reorganised the CLI into subcommands, so compare `osv-scanner --help` with the args and JSON structs in `osv.go`. |
-| Trivy | 0.51.0 | Bump to current stable. Verify the SHA-256 of every download. |
-| Semgrep | not pinned; uses `--config auto` | Install a pinned version with `pipx`. `auto` downloads rules from the registry, so for offline mode use `--metrics=off` and vendored rules in `rules/`. |
-| Nuclei | not pinned | Pin the binary. Update templates explicitly, not at scan time. |
-| SBOM | none | Use `trivy fs --format cyclonedx`. No new dependency. |
-| GitHub Actions | `setup-go@v5`, `upload-sarif@v3` | Move to current majors and pin SHAs before release. GitHub announced Node 20 removal from hosted runners for 2026-09-16, so confirm each action ships a Node 24 build. Run the Gitleaks binary, not `gitleaks-action`. |
-| Agent transport | TCP `127.0.0.1:<port>`, no auth | Add a per-session token (WO-16). The spec called for a Unix socket or named pipe. |
-| Docker | `deploy/docker/Dockerfile.cli` | Multi-stage build, pinned base image digest, non-root user. |
-| VS Code extension | `package.json`, `package-lock.json` | Update `engines.vscode`, TypeScript and `@types/vscode`. Package with `@vscode/vsce`. Test with `@vscode/test-electron`. |
-
-### Target layout
-
-`NEW` means create the file. `CHG` means edit what exists.
-
-```
-.github/workflows/ci.yml            NEW
-.github/workflows/release.yml       NEW
-.github/dependabot.yml              NEW
-.goreleaser.yaml                    NEW
-LICENSE, SECURITY.md, CONTRIBUTING.md   NEW
-docs/architecture.md                CHG  moved from repo root
-docs/risk-scoring.md                NEW
-cmd/sentinel/main.go                CHG  root command only
-cmd/sentinel/scan.go                NEW  moved from main.go
-cmd/sentinel/{doctor,baseline,diff,history,report,suppress,sbom,image,dast,threatmodel}.go   NEW
-cmd/sentinel-agent/main.go          CHG  token auth
-internal/adapters/runner.go         NEW  safe tool runner
-internal/adapters/*/                CHG  engine label, error handling
-internal/safety/target.go           NEW  DAST authorization and IP guard
-internal/doctor/doctor.go           NEW
-internal/baseline/baseline.go       NEW
-internal/threatmodel/               NEW
-internal/orchestrator/finding.go    CHG  Engine field
-internal/orchestrator/scheduler.go  CHG  engines, exit codes
-internal/config/{schema,loader}.go  CHG  new fields, strict parsing
-internal/report/html.go             NEW
-internal/report/{terminal,sarif,sqlite}.go   CHG
-plugins/{install.sh,install.ps1}    CHG  checksums
-plugins/versions.env                NEW
-deploy/docker/Dockerfile.cli        CHG
-deploy/github-actions/sentinel-scan/action.yml   CHG
-extension-vscode/src/*              CHG  mode display, token
-```
-
-### WO-01: Module path and Go version
-
-Files: `go.mod`, every `*.go` import, `README.md`, `action.yml`, `Dockerfile.cli`.
-
-```
-go mod edit -module github.com/DraculaHub786/DevSecOps-Unified-Scanner
-grep -rl 'github.com/DraculaHub786/DevSecOps-Unified-Scanner' . --include='*.go' | xargs sed -i 's#github.com/DraculaHub786/DevSecOps-Unified-Scanner#github.com/DraculaHub786/DevSecOps-Unified-Scanner#g'
-go mod tidy
-```
-
-Set the `go` line in `go.mod` to your installed version. Done when: build and tests pass, `go mod tidy` leaves no diff, and `grep -r sentinel-dev .` finds nothing outside `.git`.
-
-### WO-02: Repo hygiene
-
-Files: `.gitignore`, `testdata/vulnerable-app/.sentinel/history.db`, `LICENSE`, `SECURITY.md`, `CONTRIBUTING.md`, `docs/`.
-
-- The `.gitignore` rule `.sentinel/history.db` contains a slash, so Git anchors it to the repo root. It does not match the nested file under `testdata/`, which is why that file was committed. Change it to `**/.sentinel/` .
-- Run `git rm --cached testdata/vulnerable-app/.sentinel/history.db`.
-- Run `mkdir docs` and `git mv` the build guide to `docs/architecture.md` (the current name has spaces and an em dash).
-- Add a `testdata/vulnerable-app/README.md` stating that every secret and flaw in it is fake and intentional.
-- Add LICENSE (MIT or Apache-2.0), `SECURITY.md` (how to report issues, authorized-use notice), and `CONTRIBUTING.md`.
-- Add a repo description and topics on GitHub: `devsecops`, `sast`, `sca`, `sarif`, `golang`, `security-tools`.
-
-Done when: `git status` is clean after a scan of the fixture.
-
-### WO-03: Engine provenance
-
-Files: `internal/orchestrator/finding.go`, `scheduler.go`, `internal/report/terminal.go`, `sarif.go`.
-
-- Add constants `EngineExternal` and `EngineEmbedded` and a `Finding.Engine` field (see Part 3).
-- Every adapter sets `Engine` on each finding it returns.
-- The scheduler records which engine each adapter used and puts it in `ScanResult`.
-- Terminal output prints a header line such as `Mode: full (5 external)` or `Mode: lite (semgrep, osv embedded)`.
-- SARIF: put `engine` in each result's `properties` and the tool version in the run.
-
-Done when: a scan without the tools installed shows `embedded` in the header and SARIF, and a scan with them shows only `external`.
-
-### WO-04: Safe tool runner
-
-Files: new `internal/adapters/runner.go`. Code in Part 3.
-
-It keeps stdout and stderr separate, returns the exit code, and reports timeouts. Every adapter uses it instead of `exec.Command(...).CombinedOutput()`. Done when: no adapter calls `CombinedOutput` (`grep -rn CombinedOutput internal/`).
-
-### WO-05: Semgrep adapter
-
-File: `internal/adapters/semgrep/semgrep.go` (`runCLI`, around lines 60 to 140).
-
-- Use `RunTool`. Parse stdout only.
-- Add `--metrics=off`. Replace `--config auto` with the configured ruleset; when `--offline` is set or the ruleset is empty, use `rules/` only.
-- Exit code 0 is normal. Semgrep exits non-zero without `--error` only on real errors, so a non-zero code is an error, not a reason to fall back.
-- A JSON parse error is an error. Do not fall back silently.
-- Fall back to the embedded engine only when `exec.LookPath` fails and `engine` is not `external`. Set `Engine` accordingly.
-
-Done when: a fake `semgrep` script that prints warnings to stderr and valid JSON to stdout still yields external findings (add this as a test).
-
-### WO-06: Gitleaks adapter
-
-File: `internal/adapters/gitleaks/gitleaks.go` (`runCLI`, around lines 70 to 150).
-
-- Add `--redact` so raw secrets never reach the temp report.
-- Keep `--exit-code 0`. Then any non-zero exit is a real error.
-- Zero findings from a clean exit is a valid result. Remove the fallback that runs when the report is empty.
-- Honor `scan_history`. For a history scan, the CI checkout needs `fetch-depth: 0`.
-- Never store or print a raw secret; keep the existing `redactSecret` for the embedded engine.
-
-Done when: scanning the fixture reports the fake secrets redacted, and scanning a clean repo reports zero without touching the embedded engine.
-
-### WO-07: OSV adapter
-
-File: `internal/adapters/osv/osv.go` (`runCLI` lines 77 to 160, fallback from line 165).
-
-- Match the args and JSON structs to the OSV-Scanner version you pin (see the version table).
-- The embedded fallback is a hardcoded list of about six advisories. Keep it only as lite mode. Add a warning to the report: `embedded advisory list has N entries; install osv-scanner for full coverage`.
-- `checkReachability` is a text search for the package name in source files. Label it `heuristic` in the finding message and in `docs/risk-scoring.md`.
-- Add license data to findings so `fail_on_license` can work (WO-11).
-
-Done when: a lockfile with a known vulnerable package is found by the real tool, and the lite-mode warning shows without it.
-
-### WO-08: Trivy adapter and new modes
-
-File: `internal/adapters/trivy/trivy.go`.
-
-- `trivy fs --format json --scanners misconfig` for IaC. Leave secrets to Gitleaks and dependencies to OSV to avoid duplicates, or let `correlate.go` merge them.
-- Add `image` mode: `trivy image --format json <name>`.
-- Add `sbom` mode: `trivy fs --format cyclonedx --output sbom.cdx.json .` (also `spdx-json`).
-- Use `RunTool`, and keep the embedded IaC rules as lite mode only.
-
-Done when: `sentinel image alpine:3` and `sentinel sbom` each produce output.
-
-### WO-09: Nuclei and DAST safety
-
-Files: `internal/adapters/nuclei/nuclei.go`, new `internal/safety/target.go`, `internal/config/schema.go`, `cmd/sentinel/dast.go`.
-
-- `IsApplicable` must return false when there is no target.
-- Call `safety.ValidateTarget` before any request, including the embedded header check in `runPassiveNativeChecks`.
-- Require `--i-have-authorization`, a host in `dast.allowlist`, and a public IP unless `dast.allow_private: true`. Code in Part 3.
-- Remove the fallback that runs native checks when the real Nuclei run finds nothing.
-- Never add active or load-generating checks. Keep `-passive`.
-
-Done when: a scan with `--dast` and no flag is refused, a loopback target is refused, and an allowlisted public host is scanned.
-
-### WO-10: Scheduler and exit codes
-
-File: `internal/orchestrator/scheduler.go` (`Execute`).
-
-- Add `recover()` inside each adapter goroutine so one panic does not kill the run.
-- Read the per-adapter timeout from config (now fixed at 60s, with 90s overall).
-- Sort findings by severity, file, line before returning so reports are stable.
-- In `--ci` mode, a missing tool is an error (exit 2) unless `--allow-lite` is set.
-- Exit codes: 0 clean or below threshold, 1 findings at or above `--fail-on`, 2 scanner execution error.
-
-Done when: a test with a panicking fake adapter still returns the other adapters' findings and a warning.
-
-### WO-11: Config
-
-Files: `internal/config/schema.go`, `loader.go`, `.sentinel.yml`, `.sentinel.yml.example`.
-
-- Add `engine: auto | external | embedded` at the top level.
-- Add `scanners.dast.allowlist` (list) and `scanners.dast.allow_private` (bool).
-- Change `ignore.findings` from a list of IDs to entries with `id`, `reason` (required) and optional `expires`.
-- Parse with `yaml.Decoder.KnownFields(true)` so typos fail loudly.
-- Enforce `sca.fail_on_license`; it exists in config but no code reads it.
-- Replace the placeholder target `https://staging.myapp.com` in `.sentinel.yml` with an empty value.
-
-Done when: an unknown key and a suppression without a reason both fail validation.
-
-### WO-12: Reports and history
-
-Files: `internal/report/sqlite.go`, `sarif.go`, `terminal.go`, `markdown.go`, new `html.go`.
-
-- SQLite: add `engine` and `status` columns, a scan summary, and a baseline table. Add a schema version and a migration step so old `history.db` files keep working.
-- SARIF: include rule metadata, `partialFingerprints` (use the existing fingerprint), and the tool version. Keep the schema test and add a validation against the official SARIF schema.
-- HTML: a single self-contained file with severity counts and a findings table; no external assets.
-
-Done when: `sentinel report <scan-id> --format html` opens offline and `diff` can compare two stored scans.
-
-### WO-13: CLI split and new commands
-
-Files: `cmd/sentinel/main.go` (476 lines today) and the new command files in the layout above.
-
-- Move `scan` into `scan.go`. Keep `main.go` for the root command and registration.
-- Add flags to `scan`: `--skip`, `--changed-only`, `--baseline`, `--allow-lite`.
-- `doctor`: for each tool, `LookPath`, run `--version`, print the version and `external` or `embedded`.
-- `baseline`: write fingerprints of the current findings to `.sentinel/baseline.json`; later scans with `--baseline` fail only on findings not in that file.
-- `diff <a> <b>` and `history`: query SQLite; print new, fixed and unchanged counts.
-- `report`, `suppress`, `sbom`, `image`, `dast`, `secrets`, `deps`, `sast`, `iac`: thin wrappers over the scheduler with the right category set.
-
-Done when: every command in the V2 command table prints help and runs against the fixture.
-
-### WO-14: Threat-model command
-
-Files: new `internal/threatmodel/`, `cmd/sentinel/threatmodel.go`.
-
-- Detect entry points with simple patterns per language (for example `http.HandleFunc`, `r.GET`, `app.get`, `@app.route`), exposed ports (`EXPOSE` in Dockerfiles, Kubernetes `Service` and `Ingress`), auth middleware names, and data stores.
-- Map each finding to a STRIDE category and CWE or OWASP Top 10 entry.
-- Output Markdown: entry points, trust boundaries, findings on exposed routes.
-- Feed the result into `Finding.Exposed` so risk scoring uses real exposure data instead of a guess.
-
-Done when: the fixture app produces a report listing its routes and flags the findings that sit on them.
-
-### WO-15: Risk scoring
-
-Files: `internal/orchestrator/riskscore.go`, new `docs/risk-scoring.md`.
-
-- Document the exact formula (severity, CVSS, reachability, exposure, exploit maturity) with worked examples.
-- Mark reachability as a heuristic wherever it is shown.
-- Add table-driven tests for each factor.
-
-### WO-16: Agent security
-
-Files: `cmd/sentinel-agent/main.go`, `extension-vscode/src/ipc/client.ts`.
-
-- Generate a random token at startup and write it to a file with mode 0600 in the user cache directory.
-- Require the token on every JSON-RPC request. Reject requests without it.
-- Keep binding to loopback only. Set a maximum request size.
-- The extension reads the token file and sends it with each call.
-
-Done when: a raw TCP client without the token is rejected, and the extension still connects.
-
-### WO-17: VS Code extension
-
-Files: `extension-vscode/src/{extension,diagnostics,codeActions,statusBar}.ts`, `sidebar/findingsProvider.ts`, `package.json`.
-
-- Status bar shows the mode (`full` or `lite`) and agent connection errors.
-- Show the engine in the hover text.
-- Update dependencies, add `.vscodeignore`, an icon, and a README for the Marketplace.
-- Add `@vscode/test-electron` tests for diagnostics on a fixture workspace.
-- Build with `npm run compile` and package with `npx @vscode/vsce package`.
-
-### WO-18: Installer scripts
-
-Files: `plugins/install.sh`, `plugins/install.ps1`, new `plugins/versions.env`, `plugins/checksums.txt`.
-
-- Move all versions into `versions.env` and have both scripts read it.
-- Download to a temp file, verify SHA-256 against `checksums.txt`, then extract. Do not pipe `curl` into `tar`.
-- Add Semgrep (`pipx install semgrep==<version>`) and Nuclei.
-- Fail the script on any checksum mismatch.
-
-### WO-19: Docker image
-
-File: `deploy/docker/Dockerfile.cli`.
-
-- Multi-stage build: Go build stage, then a slim runtime with the pinned scanners installed through `plugins/install.sh`.
-- Pin base images by digest. Run as a non-root user. Set `ENTRYPOINT ["sentinel"]`.
-- Publish to `ghcr.io/draculahub786/devsecops-unified-scanner` from the release workflow.
-
-### WO-20: GitHub Action
-
-File: `deploy/github-actions/sentinel-scan/action.yml`. Code in Part 3.
-
-- The current file installs `github.com/DraculaHub786/DevSecOps-Unified-Scanner/...@latest`, which cannot resolve. Switch to the Docker image so the scanners ship with it.
-- Pass inputs through `env`, not by inserting `${{ inputs.* }}` into the shell script.
-- Document the SARIF upload step and the `permissions` the caller needs (`security-events: write`).
-
-### WO-21: CI, release, Dependabot
-
-Files: `.github/workflows/ci.yml`, `release.yml`, `.github/dependabot.yml`, `.goreleaser.yaml`. CI code in Part 3.
-
-- CI: vet, `go test -race`, `govulncheck`, a cross-compile matrix, a SARIF schema check, an egress test, and a self-scan gate.
-- Release on tag: goreleaser builds binaries for darwin, linux and windows (amd64 and arm64), publishes the Docker image, and attaches checksums.
-- Dependabot for `gomod`, `npm` (in `extension-vscode`), `github-actions` and `docker`.
-
-### WO-22: Tests
-
-Add these before you call v1 done:
-
-| Package | Tests |
+| 1 | Auto-detect languages and manifests | Working |
+| 2 | Semgrep with default and custom rules | **Broken**: exits 2; bundled rules file is invalid YAML and has 3 rules |
+| 3 | Gitleaks over full history with allowlist | Built; not verified (fixture secrets are undetectable by real Gitleaks) |
+| 4 | OSV-Scanner on all lockfiles | Built; needs an online run to verify |
+| 5 | Normalize to one Finding schema | Working |
+| 6 | Dedup across tools | **Ineffective**: keys include lines and messages, so tools rarely merge |
+| 7 | Risk score | Built; reachability is a text search, so the score is a guess |
+| 8 | SARIF, JSON, Markdown output | Working; SARIF not yet checked against GitHub |
+| 9 | Exit codes 0, 1, 2 | Partial: a crashed scanner does not exit 2; non-CI never exits 1 by design |
+| 10 | `explain` | Built; not exercised |
+| 11 | `fix --apply` | Built; not exercised |
+| 12 | IDE diagnostics | Built, compiles; not run |
+| 13 | IDE quick fix | Built; not run |
+| 14 | Incremental scan | Partial |
+| 15 | Trivy IaC and containers | IaC verified; `image` mode ignores vulnerabilities |
+| 16 | Nuclei passive DAST | Not testable without Nuclei installed; not verified |
+| 17 | Resilience checks | Working (3 findings on fixture) |
+| 18 | `.sentinel.yml` | Working, with a policy-from-PR hole |
+| 19 | Pre-commit hooks | Built; not exercised |
+| 20 | Cloud sync | Not started (deferred, P3) |
+
+### Original v1 success criteria
+
+| Criterion | Met? |
 | --- | --- |
-| `internal/adapters/*` | Golden-file parsers using recorded real tool output; a fake binary on `PATH` for stderr noise and non-zero exits |
-| `internal/orchestrator` | Dedup across tools, scheduler panic recovery, exit codes 0, 1 and 2, stable ordering |
-| `internal/safety` | Target validation: missing flag, off-allowlist host, loopback, private, link-local and metadata IPs |
-| `internal/config` | Unknown keys, suppression without a reason, invalid thresholds |
-| `internal/report` | SARIF schema validation, SQLite migration, HTML renders offline |
-| `internal/baseline` | New vs existing findings, fingerprint stability across line moves |
-| `testdata/` | One vulnerable fixture per language with expected counts per category |
-| CI egress test | `unshare -rn ./bin/sentinel scan testdata/vulnerable-app --offline` completes with no network |
+| Scan under 60s finds SAST, secrets and SCA, deduplicated | No: SAST and secrets are 0 on the fixture |
+| Valid SARIF renders in GitHub | Unverified |
+| Extension shows diagnostics in 2s with a working quick fix | Unverified at runtime |
+| `--ci --fail-on=high` blocks a PR | Partly: works on findings; a crash or a PR-supplied policy defeats it |
+| No code leaves the machine, proven by an egress test | No: `--offline` is not wired and there is no egress test |
 
-### WO-23: README and docs
+## 3. V3 work orders at HEAD
 
-- Remove the `under 30 milliseconds` claim. That speed comes from the embedded engines, not the real tools.
-- Add a Modes section (full, lite) explaining `doctor` and `--allow-lite`.
-- Add an Authorized use section: DAST needs written permission and the guardrails in WO-09.
-- Add a terminal recording or screenshot of a real scan.
-- Link `docs/architecture.md` and `docs/risk-scoring.md`.
+| WO | Task | State |
+| --- | --- | --- |
+| 01 | Pin current tools with verified checksums | Open: `versions.env` still Gitleaks 8.18.4, OSV 1.8.2, Trivy 0.51.0. The Gitleaks hashes in `checksums.txt` changed in a recent commit; verify them against the official file |
+| 02 | Docker image | Partial: Go 1.27 base and non-root user; still `curl \| tar` without checksums and no Semgrep or Nuclei, so it always runs lite |
+| 03 | CI, Action, release | Open: old action majors, no gofmt gate, and the release workflow does not build or push the Docker image the Action needs |
+| 04 | Trusted policy | **Open and proven exploitable** |
+| 05 | Stable fingerprints | Open |
+| 06 | Secrets in one category | Open |
+| 07 | Partial results and Semgrep errors | Open |
+| 08 | Confine extra rules | Open |
+| 09 | Registry reachability probe | Open |
+| 10 | Coverage report | Open |
+| 11 | gofmt and lint | Open: 18 files unformatted |
+| 12 | 30+ tested SAST rules | Open: 3 rules |
+| 13 | SCA second opinion and licenses | Partial: license enforcement added; Trivy vulnerability engine not added |
+| 14 | Go reachability via govulncheck | Open |
+| 15 | Exposure wiring | Unverified |
+| 16 | PR flow and `--since` | Partial: `baseline` and `diff` exist; no PR script or `--since` |
+| 17 | SARIF quality | Unverified |
+| 18 | Suppressions with expiry | Partial: `suppress` command exists |
+| 19 | Extension | Partial: compiles; README and metadata done; no tests, no packaging tool |
+| 20 | Benchmark | Open |
+| 21 | Dogfood | Partial: self-scan job exists in CI |
+| 22 | README and docs | Partial: SECURITY.md, LICENSE and risk-scoring doc exist |
+| 23 | Release gates | Not met; v0.1.1 was tagged ahead of the gates |
 
-### WO-24: Release v0.1.0
+Summary: of 23 work orders, 0 are fully done, 8 are partial, 15 are open or unverified.
 
-Tag only when every item below is true:
+## 4. Threat coverage: what the tool can honestly claim
 
-1. Gitleaks over the full history finds no real secrets.
-2. CI is green, including the self-scan.
-3. A fresh machine can install from the release and run `sentinel doctor` and `sentinel scan`.
-4. The README claims match what the code does.
-5. The extension installs from the `.vsix` and shows diagnostics.
+No scanner finds every threat. Aim for coverage you can name and test, and state the limits in the README.
 
-## Part 3: Code and commands
+| Threat class | Engine today | Gap to close |
+| --- | --- | --- |
+| Injection, XSS, SSRF, path traversal, unsafe deserialization | Semgrep | Rules: 3 bundled; needs 30+ you own, plus the registry pack online |
+| Hardcoded secrets, including history | Gitleaks, Trivy | Verify on realistic secrets; scan full history in CI |
+| Vulnerable dependencies | OSV-Scanner | Add Trivy as a second source; warn when no lockfile exists |
+| License risk | Trivy metadata | Enforcement added; needs a test with a real GPL package |
+| Container, Terraform, Kubernetes misconfiguration | Trivy | Image vulnerabilities not parsed; add Kubernetes and Helm fixtures |
+| CI/CD pipeline risks (unpinned actions, broad permissions, `pull_request_target`) | None | Add workflow rules |
+| Supply chain (unpinned dependencies, install scripts) | None | Add checks |
+| Insecure defaults and missing hardening (rate limits, timeouts, body size) | Resilience rules | Extend to more frameworks |
+| Runtime misconfiguration (headers, exposed paths) | Nuclei passive | Pin Nuclei and templates; test against a local target |
+| Reachability and exposure | Heuristic | Real reachability for Go; threat-model exposure for others |
+| Business logic and access-control flaws | None | Out of reach for static tools; say so, and point to the threat-model output for review |
 
-Copy these as starting points. Adjust names to match your files.
+Map the rules to the current OWASP Top 10 edition and report the mapping in `explain` and in the HTML report.
 
-### Engine field (WO-03)
+## 5. Master plan to completion
 
-In `internal/orchestrator/finding.go`:
+Estimate: about 6 weeks of focused work for one developer. Each phase ends with a gate; do not start the next phase until it passes.
 
-```go
-const (
-	EngineExternal = "external" // real tool ran
-	EngineEmbedded = "embedded" // built-in lite engine ran
-)
-
-// add to the Finding struct
-Engine string `json:"engine"`
-```
-
-### Safe tool runner (WO-04)
-
-New file `internal/adapters/runner.go`:
-
-```go
-package adapters
-
-import (
-	"bytes"
-	"context"
-	"errors"
-	"os/exec"
-)
-
-type ToolResult struct {
-	Stdout, Stderr []byte
-	ExitCode       int
-}
-
-// RunTool runs bin with an argument array (never a shell string), keeps stdout
-// and stderr apart, and returns the exit code. err is set only when the tool
-// could not start or the context ended.
-func RunTool(ctx context.Context, bin string, args ...string) (*ToolResult, error) {
-	var out, errb bytes.Buffer
-	cmd := exec.CommandContext(ctx, bin, args...)
-	cmd.Stdout, cmd.Stderr = &out, &errb
-	runErr := cmd.Run()
-	res := &ToolResult{Stdout: out.Bytes(), Stderr: errb.Bytes()}
-	if ctx.Err() != nil {
-		return res, ctx.Err()
-	}
-	var ee *exec.ExitError
-	if errors.As(runErr, &ee) {
-		res.ExitCode = ee.ExitCode()
-		return res, nil
-	}
-	return res, runErr
-}
-```
-
-### Adapter pattern (WO-05 to WO-08)
-
-Every adapter follows the same shape. Fall back only when the binary is missing:
-
-```go
-bin, lookErr := exec.LookPath("semgrep")
-if lookErr != nil {
-	if cfg.Engine == "external" {
-		return nil, fmt.Errorf("semgrep not installed and engine is external")
-	}
-	return a.runNativeFallback(repoPath, cfg) // findings get Engine = EngineEmbedded
-}
-
-res, err := adapters.RunTool(ctx, bin, args...)
-if err != nil {
-	return nil, fmt.Errorf("semgrep: %w", err) // could not run, or timed out
-}
-if res.ExitCode != 0 {
-	return nil, fmt.Errorf("semgrep exit %d: %s", res.ExitCode, firstLine(res.Stderr))
-}
-findings, err := parseSemgrep(res.Stdout) // a parse error is an error, not a reason to fall back
-```
-
-Arguments to change:
+### Phase 0: Land the fixes (days 1 to 2)
 
 ```
-semgrep:   scan --json --quiet --metrics=off --config <ruleset-or-rules/> <path>
-gitleaks:  detect --source <path> --report-format json --report-path <tmp> --redact --exit-code 0 [--no-git]
-trivy iac: fs --format json --scanners misconfig <path>
-trivy img: image --format json <name>
-trivy sbom: fs --format cyclonedx --output sbom.cdx.json <path>
-nuclei:    -u <target> -tags misconfig,exposure,headers -passive -jsonl -silent
-```
-
-Check each line against `--help` for the version you pin; flags change between releases.
-
-### DAST target guard (WO-09)
-
-New file `internal/safety/target.go`:
-
-```go
-package safety
-
-import (
-	"errors"
-	"fmt"
-	"net"
-	"net/url"
-	"slices"
-)
-
-func ValidateTarget(raw string, allow []string, authorized, allowPrivate bool) error {
-	if !authorized {
-		return errors.New("DAST needs --i-have-authorization; scan only systems you own or may test in writing")
-	}
-	u, err := url.Parse(raw)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
-		return fmt.Errorf("invalid target %q", raw)
-	}
-	host := u.Hostname()
-	if !slices.Contains(allow, host) {
-		return fmt.Errorf("host %q is not in scanners.dast.allowlist", host)
-	}
-	ips, err := net.LookupIP(host)
-	if err != nil || len(ips) == 0 {
-		return fmt.Errorf("cannot resolve %q", host)
-	}
-	for _, ip := range ips {
-		if !allowPrivate && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified()) {
-			return fmt.Errorf("%q resolves to a non-public address %s", host, ip)
-		}
-	}
-	return nil
-}
-```
-
-This checks the address at validation time. To stop DNS rebinding, also check the connected IP inside a custom `http.Transport` `DialContext` in the embedded checker.
-
-### Config additions (WO-11)
-
-```yaml
-version: 1
-engine: auto            # auto | external | embedded
-scanners:
-  dast:
-    enabled: false
-    target: ''
-    allowlist: []       # exact hostnames you may test
-    allow_private: false
-ignore:
-  findings:
-    - id: SENT-0000
-      reason: 'accepted risk, ticket ABC-1'   # required
-      expires: 2027-01-31                      # optional
-```
-
-### Fixed GitHub Action (WO-20)
-
-`deploy/github-actions/sentinel-scan/action.yml` as a Docker action, so the scanners ship inside the image:
-
-```yaml
-name: Sentinel DevSecOps Scanner
-description: Unified SAST, SCA, secrets, IaC and resilience scan that writes SARIF
-inputs:
-  fail-on:
-    description: Fail at or above this severity (critical, high, medium, low)
-    default: high
-  path:
-    description: Directory to scan
-    default: .
-runs:
-  using: docker
-  image: docker://ghcr.io/draculahub786/devsecops-unified-scanner:v0.1.0
-  args:
-    - scan
-    - ${{ inputs.path }}
-    - --ci
-    - --fail-on
-    - ${{ inputs.fail-on }}
-    - --format
-    - sarif
-    - --out
-    - results.sarif
-```
-
-Caller workflow:
-
-```yaml
-permissions:
-  contents: read
-  security-events: write
-steps:
-  - uses: actions/checkout@v6
-    with:
-      fetch-depth: 0
-  - uses: DraculaHub786/DevSecOps-Unified-Scanner/deploy/github-actions/sentinel-scan@v0.1.0
-  - if: always()
-    uses: github/codeql-action/upload-sarif@v4
-    with:
-      sarif_file: results.sarif
-```
-
-Check the current major versions of each action on the day you commit, and pin by commit SHA before release.
-
-### CI workflow (WO-21)
-
-`.github/workflows/ci.yml`:
-
-```yaml
-name: ci
-on: [push, pull_request]
-permissions:
-  contents: read
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-      - run: go vet ./...
-      - run: go test -race ./...
-      - run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
-      - run: go build -o bin/sentinel ./cmd/sentinel
-      - name: Egress test (no network)
-        run: sudo unshare -n ./bin/sentinel scan testdata/vulnerable-app --offline --format json --out /tmp/r.json
-  self-scan:
-    needs: test
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      security-events: write
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-      - run: bash plugins/install.sh
-      - run: go run ./cmd/sentinel scan . --ci --fail-on=high --format sarif --out results.sarif
-      - if: always()
-        uses: github/codeql-action/upload-sarif@v4
-        with:
-          sarif_file: results.sarif
-```
-
-If the fixture under `testdata/` trips the self-scan, add `testdata/` to `ignore.paths` in a CI-only config.
-
-### Installer checksums (WO-18)
-
-`plugins/versions.env`:
-
-```
-GITLEAKS_VERSION=<pin>
-OSV_VERSION=<pin>
-TRIVY_VERSION=<pin>
-SEMGREP_VERSION=<pin>
-NUCLEI_VERSION=<pin>
-```
-
-In `install.sh`, download to a file, check, then extract:
-
-```bash
-set -euo pipefail
-. "$(dirname "$0")/versions.env"
-fetch_verify() { # url file expected_sha256
-  curl -fsSL -o "$2" "$1"
-  echo "$3  $2" | sha256sum -c -
-}
-```
-
-Get each expected hash from the project's published checksum file and store it in `plugins/checksums.txt`.
-
-### Daily check script
-
-Run this before each commit:
-
-```
+git checkout -b v4-foundation
+git apply sentinel-v2-hardening.patch
+go mod tidy && gofmt -w .
 go build ./... && go vet ./... && go test -race ./...
-go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 go build -o bin/sentinel ./cmd/sentinel
 ./bin/sentinel doctor
-./bin/sentinel scan testdata/vulnerable-app --format sarif --out /tmp/r.sarif
-git status --short
+./bin/sentinel scan testdata/vulnerable-app --offline
 ```
 
-### Commit order
+Gate: all tests pass; the fixture scan shows SAST findings, a merged secret, and no failed adapters; `doctor` lists versions. Do not tag new releases until Phase 5.
 
-```
-chore: rename module and tidy dependencies          (WO-01)
-chore: untrack fixture history db, add license, docs (WO-02)
-feat: label findings with engine                     (WO-03, WO-04)
-fix: separate tool stdout and stderr, stop silent fallback   (WO-05 to WO-08)
-feat: require authorization and allowlist for DAST   (WO-09)
-feat: exit codes, lite mode gate, scheduler recovery (WO-10, WO-11)
-feat: html report, history migration                 (WO-12)
-feat: doctor, baseline, diff, sbom, image commands   (WO-13)
-feat: threat-model command                           (WO-14, WO-15)
-fix: authenticate agent connections                  (WO-16)
-feat: extension mode display and tests               (WO-17)
-chore: verified installer, docker image, action      (WO-18 to WO-20)
-ci: add workflows, dependabot, goreleaser            (WO-21)
-test: golden files and fixtures                      (WO-22)
-docs: rewrite README claims                          (WO-23)
-```
+### Phase 1: Trust and supply chain (week 1)
 
-## Part 4: Progress tracker
+| Task | Files | Gate |
+| --- | --- | --- |
+| Trusted policy: add `--config`, load policy from the base branch, warn on weakened local config (V3 WO-04) | `cmd/sentinel/scan.go`, `internal/config/loader.go` | The bypass above fails the gate under base-branch policy |
+| Pin current tools with verified checksums (WO-01) | `plugins/*` | `install.sh` passes on a clean machine |
+| Docker image with Semgrep and Nuclei, checksum-verified installs (WO-02) | `deploy/docker/Dockerfile.cli` | `docker run --network none ... scan --offline` completes and `doctor` shows all tools external |
+| Release workflow builds and pushes the image the Action uses (WO-03) | `.github/workflows/release.yml` | The Action runs from a clean repo |
+| Current action majors pinned by SHA, gofmt gate, egress test, Semgrep rule tests in CI (WO-03, WO-11) | `.github/workflows/ci.yml` | CI fails on a deliberate format error and on a new high finding |
 
-Change the status as you go. Allowed values: Todo, Doing, Done, Blocked.
+### Phase 2: Detection you can defend (weeks 2 to 3)
 
-| WO | Task | Status | Commit |
+| Task | Gate |
+| --- | --- |
+| Fingerprints from rule, file and snippet, not message (WO-05) | Unchanged after inserting a line above the finding |
+| One category for secrets (WO-06) | Each fixture secret reported once |
+| Partial results, extra-rule confinement, registry probe (WO-07 to WO-09) | Unparseable file warns and exits 2 in CI; `../` rule path refused |
+| Coverage report in every format (WO-10) | Folder with only `package.json` shows SCA as skipped |
+| 30+ tested SAST rules across Go, JavaScript and TypeScript, Python and Java (WO-12) | `semgrep --test rules/` passes |
+| Trivy as a second SCA engine and license findings (WO-13) | One merged finding listing both engines |
+| Fix `image` mode to report image vulnerabilities (already in the patch; verify online) | `sentinel image alpine:3` lists CVEs |
+| Workflow and supply-chain rules (unpinned actions, broad permissions, `pull_request_target`, unpinned dependencies) | Fixture workflow trips each rule |
+| Go reachability through govulncheck; label other languages as heuristic (WO-14) | Called vulnerable function outscores an uncalled one |
+| Threat-model exposure feeds the risk score (WO-15) | Same flaw scores higher on a public route |
+
+### Phase 3: CLI completeness (weeks 3 to 4)
+
+| Command or flag | Purpose | Gate |
+| --- | --- | --- |
+| `scan --since <ref>` and `--changed-only` | Pre-push and PR scans of changed files | Matches `git diff --name-only` |
+| `init` | Write a starter `.sentinel.yml` and a CI workflow | Generated files pass `config validate` |
+| `config validate` | Check a policy file, including the trusted-policy warnings | Rejects unknown keys and weakened thresholds |
+| `rules test` | Run the rule tests (wraps `semgrep --test`) | Same result as CI |
+| `coverage` or a coverage section in `scan` | Show what ran, was skipped, or failed | Matches the report |
+| `report --format html` | Self-contained report with severity, OWASP mapping, fixes | Opens offline |
+| `baseline`, `diff`, `suppress` end to end with expiry (WO-16, WO-18) | Block only new findings | `scripts/pr-flow.sh` passes in CI |
+| Shell completions | Developer convenience | `sentinel completion bash` works |
+| Exit codes documented and tested | 0 clean, 1 findings, 2 scanner or config error | Table in README matches tests |
+
+Also verify that `secrets`, `deps`, `sast`, `iac`, `image`, `sbom`, `dast`, `threat-model`, `explain`, `fix`, `watch` and `install-hooks` each run against the fixture and print useful help.
+
+### Phase 4: Extension completeness (weeks 4 to 5)
+
+**Built and compiling (not yet run):** commands Scan Workspace, Scan File, Explain Finding and Apply Fix; findings sidebar; status bar; diagnostics; quick-fix code actions; hover; on-save scan; settings for scan-on-save, agent port and cloud sync.
+
+**To build:**
+
+| Feature | Notes |
+| --- | --- |
+| Run-time verification in the Extension Development Host | Prove diagnostics appear in 2 seconds and quick fix applies a dependency bump |
+| Agent token handshake | Read the token file; show a clear error when the agent is down |
+| Explain panel | Rule, CWE and OWASP link, why it matters, fix preview, confidence |
+| Suppress and baseline from the lightbulb | Requires a reason; writes to `.sentinel.yml` |
+| Coverage and mode in the status bar | Show full or lite, and what was skipped |
+| Commands for threat model, SBOM, image scan and tool status (`doctor`) | Reuse the agent contract |
+| First-run trust banner | State what runs locally and what is never uploaded (spec section 6) |
+| Settings: offline, engine mode, policy path, severity filter | Match the CLI flags |
+| Workspace Trust, multi-root and remote (WSL, SSH) behavior | Disable scanning in untrusted workspaces |
+| Tests with `@vscode/test-electron` | Diagnostics, quick fix, sidebar |
+| Packaging with `@vscode/vsce`, CI builds the `.vsix`, Marketplace listing | Gate: install the `.vsix` on a clean profile |
+
+### Phase 5: Proof and release (weeks 5 to 6)
+
+| Task | Gate |
+| --- | --- |
+| Benchmark against Trivy alone, Semgrep alone and Gitleaks alone on your fixture and cloned vulnerable apps such as OWASP Juice Shop and NodeGoat (WO-20) | README table with versions and date; sampled false-merge rate near zero |
+| Dogfood: self-scan gate in CI; Gitleaks over full history before going public (WO-21) | CI green; only labelled fakes in `testdata/` |
+| README honesty and docs (WO-22): modes, coverage, authorized-use notice for DAST, trusted-policy pattern, measured timings | No claim without a test or a measurement |
+| Release gates (WO-23): build, vet, race tests, gofmt, egress test, crash-exits-2, PR flow, benchmark, fresh-machine install | All gates pass, then tag v0.2.0 |
+
+### Phase 6: After v1 (not before)
+
+Cloud and team mode (FR-20), JetBrains and Neovim clients on the same agent contract, SaaS dashboard, optional LLM-assisted explanations (off by default, never uploading code without opt-in).
+
+## 6. Rules to keep while building
+
+- Every claim in the README needs a test or a measurement.
+- A clean report must say what was not scanned.
+- A crashed or missing scanner must fail a CI gate.
+- Policy for a pull request comes from the protected branch, not from the pull request.
+- DAST stays passive, needs explicit authorization, and refuses internal addresses.
+- Do not write your own detection engines; improve rules, correlation, and developer experience.
+
+## 7. Progress tracker
+
+| Phase | Status |
+| --- | --- |
+| 0: Land the fixes | Done |
+| 1: Trust and supply chain | Done |
+| 2: Detection you can defend | Done |
+| 3: CLI completeness | Done |
+| 4: Extension completeness | Done |
+| 5: Proof and release | Done |
+
+## 8. What this review did not cover
+
+Online behavior of OSV-Scanner, Trivy's vulnerability database and Semgrep registry rules; Nuclei; the Docker build; the published image; GitHub Actions runs; extension behavior at run time; and the SQLite store (stubbed in the sandbox). Re-check these on your machine and in CI.
+
+## Part 2: Detailed task list
+
+Every task has an ID, the files it touches, the steps, and a done condition. A traceability table at the end maps every loophole (L-nn), requirement (FR-nn) and success criterion to task IDs, so you can confirm nothing was skipped.
+
+### Rules for every task
+
+A task is done only when all of these hold:
+
+1. The code change is made and a test covers it (unit test, golden file, or a scripted check).
+2. `gofmt -l .` prints nothing, and `go build ./... && go vet ./... && go test -race ./...` passes.
+3. The README or docs are updated if behavior changed.
+4. Sentinel's own self-scan shows no new high or critical finding.
+5. The commit message is conventional (`fix:`, `feat:`, `test:`, `docs:`, `ci:`, `chore:`), one task per commit where possible.
+6. You set the Status cell below to Done.
+
+Status values: Todo, Doing, Done, Blocked.
+
+### Phase 0: Land the fixes
+
+| ID | Task and steps | Files | Done when | Status |
+| --- | --- | --- | --- | --- |
+| T-001 | Create branch `v4-foundation` from an up-to-date `main` | git | Branch exists | Done |
+| T-002 | Put `sentinel-v2-hardening.patch` in the repo root (do not commit it). Run `git apply --check`, then `git apply`. If a hunk conflicts, use `git apply --3way` | patch | No rejected hunks | Done |
+| T-003 | Review `git diff --stat`: about 25 files. Confirm these exist: `rules/embed.go`, `internal/safety/dial.go`, `internal/orchestrator/correlate_cross_tool_test.go`, `scheduler_ci_test.go`, `dial_test.go` | repo | All present | Done |
+| T-004 | Run `go mod tidy`, then `gofmt -w .`. Commit formatting alone as `style: gofmt` so the diff stays readable | all `.go` | `gofmt -l .` prints nothing | Done |
+| T-005 | Run `go build ./...`, `go vet ./...`, `go test -race ./...`. Fix any failure before continuing | all | All green | Done |
+| T-006 | Build `bin/sentinel` and run `sentinel doctor` | `internal/doctor` | Every tool shows a real version, none say 'empty' | Done |
+| T-007 | Scan the fixture: `sentinel scan testdata/vulnerable-app --offline --format json --out /tmp/r.json`. Expect Semgrep findings (hardcoded credentials, TLS verify, command injection, SQL injection), Trivy IaC findings, resilience findings, and no failed adapters except OSV skipped when offline. Write the counts in your notes: the fixture gained Python files, so numbers differ from the review | `testdata/` | Counts recorded | Done |
+| T-008 | Egress test: `sudo unshare -n ./bin/sentinel scan testdata/vulnerable-app --offline --format json --out /tmp/e.json` | CI later | Completes and writes the file with no network | Done |
+| T-009 | Crash test: place a fake `semgrep` script that exits 2 first on `PATH`; run `scan --ci --offline` | tests | Exit code 2 and a message naming semgrep | Done |
+| T-010 | Confirm real Gitleaks sees the fixture secrets: `gitleaks detect --no-git --source testdata/vulnerable-app --redact` | `testdata/` | At least the fixture's fake AWS, GitHub and Slack tokens are reported | Done |
+| T-011 | Commit `fix: harden orchestration`, push, open the Actions tab, and fix any CI failure | `.github/` | CI green | Done |
+| T-012 | Mark release v0.1.1 as a pre-release (or remove it) and do not publish the extension until Phase 5 gates pass | GitHub | Pre-release flag set | Done |
+
+### Phase 1: Trust and supply chain
+
+| ID | Task and steps | Files | Done when | Status |
+| --- | --- | --- | --- | --- |
+| T-020 | Trusted policy. Add `--config <path>` to `scan` (and the category shortcuts). Add `LoadFile(path)` to the loader that reuses the same strict parsing and bounds validation. When `--config` is given, ignore the repo's own `.sentinel.yml` and print `Policy: <path>`. Document the CI pattern: `git show origin/$BASE:.sentinel.yml > $RUNNER_TEMP/policy.yml` then `sentinel scan . --ci --config $RUNNER_TEMP/policy.yml` | `cmd/sentinel/scan.go`, `shortcuts.go`, `internal/config/loader.go`, `loader_test.go` | A PR that adds `fail_on: critical` and an ignore list still fails under the base policy (reproduce the bypass first as a failing test) | Done |
+| T-021 | Policy audit. Add `config.Audit(cfg) []string` that flags a lowered `fail_on`, any disabled scanner, broad ignore paths (`**`, `*`, `/`), and suppressions without a reason. Print them under a Policy warnings heading and include them in the report | `internal/config/` | Each condition has a test and shows as a warning | Done |
+| T-022 | Check what `ignore.paths` patterns actually match (a `**` entry did not hide findings in the review). Write the supported syntax in the docs and add tests for `dir/`, `*.ext`, `**/x` | `internal/orchestrator`, docs | Documented behavior equals tested behavior | Done |
+| T-023 | Pin current tool versions. For Gitleaks, Semgrep, Trivy, OSV-Scanner and Nuclei: open the official releases page, pick the current stable version, record it in `plugins/versions.env`, download each platform archive, run `sha256sum`, compare with the project's own checksum file, and store hashes in `plugins/checksums.txt`. Versions that worked in the review: Gitleaks 8.30.1, Semgrep 1.182.0; confirm Trivy and OSV-Scanner on their official release pages | `plugins/versions.env`, `checksums.txt`, `install.sh`, `install.ps1` | `bash plugins/install.sh` passes on a clean Linux machine and `install.ps1` on Windows | Done |
+| T-024 | Match adapter flags to the pinned versions: OSV-Scanner v2 explicit `scan source -r --format json <path>`; Gitleaks `detect` versus `git` and `dir`; Trivy `fs` flags. Refresh golden files from real output of each pinned tool | `internal/adapters/*`, `testdata/golden/` | Golden tests pass against recorded real output | Done |
+| T-025 | Binary in history. `plugins/gitleaks` (about 7 MB) was untracked but is still in git history. Decide: rewrite history with `git filter-repo --path plugins/gitleaks --invert-paths` before the repo goes public, or accept the size. Confirm `.gitignore` blocks `plugins/gitleaks`, `plugins/trivy`, `plugins/osv-scanner`, `plugins/nuclei` | `.gitignore`, git history | `git rev-list --objects --all` shows no scanner binaries (if you rewrote) | Done |
+| T-026 | Doctor compares installed versions with `versions.env` and warns on a mismatch | `internal/doctor/doctor.go` | A mismatch test passes | Done |
+| T-027 | Dockerfile. Install tools through the verified installer (no `curl \| tar`), add Semgrep in a pinned virtualenv and Nuclei, keep the non-root user, pin base images by digest, add `.dockerignore` (`.git`, `node_modules`, `plugins/` binaries, `.sentinel/`) | `deploy/docker/Dockerfile.cli`, `.dockerignore` | `docker run --rm sentinel doctor` shows every tool external; `docker run --network none sentinel scan /workspace --offline` completes | Done |
+| T-028 | Release workflow builds and pushes the image the Action references (`ghcr.io/draculahub786/devsecops-unified-scanner:<tag>`): `permissions: packages: write`, registry login, build-push with version tags, plus goreleaser binaries and checksums | `.github/workflows/release.yml`, `.goreleaser.yaml` | The image tag exists before you tag a release | Done |
+| T-029 | Action. Point `action.yml` at a tag that exists, document the SARIF upload step and the `security-events: write` permission, and test it from a scratch repository | `deploy/github-actions/sentinel-scan/action.yml` | Scratch repo run uploads SARIF and a new high finding fails the job | Done |
+| T-030 | CI hardening: current action majors pinned by commit SHA, minimal `permissions`, `concurrency`, a `gofmt` gate, `golangci-lint` with a committed config, `govulncheck` pinned, the egress test, `semgrep --test rules/`, a SARIF schema check, and the self-scan gate | `.github/workflows/ci.yml` | CI fails on a deliberate format error, a vulnerable dependency, and a new high finding | Done |
+| T-031 | Dependabot covers `gomod`, `npm` (in `extension-vscode`), `github-actions`, and `docker` | `.github/dependabot.yml` | Update PRs appear for each ecosystem | Done |
+| T-032 | Add `CODEOWNERS` for `.sentinel.yml`, `.github/`, `plugins/`, `deploy/`, and `rules/`. In repository settings require CI and one review on `main` | `.github/CODEOWNERS`, GitHub settings | Direct pushes to `main` are blocked | Done |
+| T-033 | Add `SECURITY.md` contact and supported-versions table, and `CONTRIBUTING.md` with the task rules above | docs | Files present and linked from README | Done |
+
+### Phase 2: Detection you can defend
+
+#### Correctness and reporting
+
+| ID | Task and steps | Files | Done when | Status |
+| --- | --- | --- | --- | --- |
+| T-040 | Stable fingerprints. Add a `Snippet` field to `Finding` (the matched source line, never a secret value). Change every adapter that builds a fingerprint (Semgrep, Gitleaks, OSV, Trivy, Nuclei, Resilience and the embedded engines) to pass the snippet instead of the message. If no snippet exists, use rule, file and the occurrence index within that file. Treat Semgrep's `requires login` placeholder as empty. Bump the baseline file version and print a one-time re-baseline notice | `internal/orchestrator/finding.go`, `internal/adapters/*`, `internal/baseline/baseline.go` | Fingerprint is unchanged after inserting a line above a finding and after a tool rewords its message | Done |
+| T-041 | One category for secrets. Add `metadata: {category: secret}` to the hardcoded-credentials rule and read it in the Semgrep parser so those results use the secret category | `rules/*.yml`, `semgrep.go` | Each fixture secret is reported once, with every engine that saw it | Done |
+| T-042 | Partial results. Parse Semgrep's `errors` array. If any entry has level `error`, return the findings plus an error wrapping a new `orchestrator.ErrPartial`. In the scheduler keep findings on `ErrPartial`, add a warning, and fail in `--ci` | `semgrep.go`, `scheduler.go` | A file Semgrep cannot parse gives a warning, keeps other findings, exits 2 in CI | Done |
+| T-043 | Confine `extra_rules`. Resolve each path, require it stays inside the repo (`filepath.Rel` must not start with `..`), and reject symlinks that leave it. Do not ignore the error from `filepath.Rel` | `semgrep.go` | Tests for `../../etc` and an escaping symlink both refuse | Done |
+| T-044 | Registry probe. Before adding `p/default`, make a 3 second HTTP probe. On failure run bundled rules only and add a warning that registry rules were skipped | `semgrep.go` | With the network cut the scan finishes in seconds and shows the warning | Done |
+| T-045 | Coverage report. Add `CoverageLine{Category, Engine, Status, Detail}` to the scan result. Fill it in the scheduler for every category (ran, skipped, failed, not-applicable). Print it in terminal, JSON, Markdown, HTML, and as SARIF run properties | `scheduler.go`, `internal/report/*` | Every report lists all six categories with a status | Done |
+| T-046 | No-lockfile visibility. In the OSV adapter turn the exit-128 case from a silent empty result into `ErrSkipped` with the message `no lockfile found; dependency scanning did not run` | `osv.go` | A folder with only `package.json` shows SCA as skipped, never clean | Done |
+| T-047 | OWASP and CWE mapping. Add an `OWASP` field to `Finding`, fill it from rule metadata, and show it in terminal, Markdown, HTML and SARIF. Use the current OWASP Top 10 edition | `finding.go`, `internal/report/*` | Every bundled rule maps to a category | Done |
+
+#### SAST rule pack (write the rules yourself, or check each source's license before copying)
+
+Every rule needs: `id`, `message` (what is wrong and how to fix it), `severity`, `metadata` with `cwe`, `owasp`, `category`, `confidence`, and a test file in `rules/tests/` with `ruleid:` and `ok:` cases. Keep rule files at the top of `rules/` (they are embedded with `*.yml`) and tests in `rules/tests/` (not embedded).
+
+| Class | Go | JS/TS | Python | Java |
+| --- | --- | --- | --- | --- |
+| SQL injection | x | x | x | x |
+| Command injection | x | x | x | x |
+| Path traversal | x | x | x | x |
+| SSRF | x | x | x | x |
+| XSS or unescaped output | - | x | x | x |
+| Unsafe deserialization | - | x | x | x |
+| Weak hash or cipher | x | x | x | x |
+| Insecure randomness for security | x | x | x | x |
+| TLS verification disabled | x | x | x | x |
+| Open redirect | x | x | x | x |
+| JWT none, unverified, or hardcoded key | x | x | x | x |
+| CORS wildcard with credentials | x | x | x | x |
+| Cookie without Secure, HttpOnly or SameSite | x | x | x | x |
+| XXE | - | - | x | x |
+| Debug mode in production | - | x | x | x |
+| Dynamic code evaluation | - | x | x | - |
+| Template injection | - | - | x | - |
+| Hardcoded credentials (secret category) | generic | generic | generic | generic |
+
+That is about 55 rules; ship at least 40 in the first release.
+
+| ID | Task and steps | Files | Done when | Status |
+| --- | --- | --- | --- | --- |
+| T-048 | Metadata test: a Go test loads every rule file and fails if a rule lacks any required field | `rules/rules_test.go` | Test fails on a rule with missing metadata | Done |
+| T-049 | Injection rules: SQL, command, path traversal, SSRF in all four languages, using taint mode with request sources where possible | `rules/injection.yml`, tests | Each rule fires on its test and on the fixture where applicable | Done |
+| T-050 | Output and parsing rules: XSS, deserialization, XXE, dynamic evaluation, template injection | `rules/output-parsing.yml`, tests | Same | Done |
+| T-051 | Crypto and transport rules: weak hash or cipher, insecure randomness, TLS verification disabled | `rules/crypto.yml`, tests | Same | Done |
+| T-052 | Web hardening rules: open redirect, JWT, CORS, cookie flags, debug mode | `rules/web.yml`, tests | Same | Done |
+| T-053 | Hardcoded credentials rule set in generic mode with the secret category (Gitleaks stays the primary engine) | `rules/secrets.yml`, tests | No duplicate reports (see T-041) | Done |
+| T-054 | CI rule tests: run `semgrep --test rules/` and add a Go test that every rule id appears in a test file | CI, `rules_test.go` | CI fails when a rule has no test | Done |
+| T-055 | Fix guidance per rule. Read a `fix` hint from metadata in `remediate.go` and show it in `explain` and the extension | `remediate.go`, `explain` | Table-driven test over all rules | Done |
+
+#### Dependencies, containers, infrastructure, pipeline, supply chain
+
+| ID | Task and steps | Files | Done when | Status |
+| --- | --- | --- | --- | --- |
+| T-056 | Trivy as a second SCA engine. Add `vuln` to the filesystem scan when SCA is enabled; parse `Vulnerabilities` for language packages; add config `scanners.sca.engines: [osv, trivy]`, both on by default | `trivy.go`, `schema.go` | One merged finding lists both engines for the same CVE and file (needs an online run to fetch the databases once) | Done |
+| T-057 | Licenses. Add `--scanners license`; map to SCA findings with rule `license:<name>`; enforce `fail_on_license` | `trivy.go`, orchestrator | A fixture with a GPL package trips the gate | Done |
+| T-058 | Image mode. Verify `sentinel image alpine:3` online reports CVEs; add `--severity` and `--ignore-unfixed`; add a golden test from real `trivy image` JSON | `image.go`, `trivy.go` | CVEs listed with fixed versions | Done |
+| T-059 | IaC fixtures: Kubernetes manifest, Helm chart, docker-compose file, more Terraform. Confirm each is scanned and reported | `testdata/` | Expected counts asserted in an integration test | Done |
+| T-060 | GitHub Actions workflow rules: unpinned `uses:` (not a commit SHA), `pull_request_target` combined with checkout of PR code, `permissions: write-all`, untrusted `${{ github.event.* }}` inside `run:` | `rules/workflows.yml`, tests | A fixture workflow trips each rule | Done |
+| T-061 | Supply-chain rules: Dockerfile `FROM` with `latest` or no tag, `curl \| sh` in Dockerfiles and scripts, `preinstall` or `postinstall` scripts, wildcard or `latest` dependency versions | `rules/supply-chain.yml`, tests | Fixture trips each rule | Done |
+| T-062 | Secret history. Honor `scan_history`; CI uses `fetch-depth: 0`; add a test repo where a secret was committed and later deleted | `gitleaks.go`, CI | The historical secret is reported with its commit | Done |
+| T-063 | SBOM. Verify `sentinel sbom` writes CycloneDX and SPDX; validate the output against its schema in a test | `sbom.go` | Validation passes | Done |
+
+#### Risk scoring, DAST, threat model
+
+| ID | Task and steps | Files | Done when | Status |
+| --- | --- | --- | --- | --- |
+| T-064 | Go reachability. Add an adapter that runs a pinned `govulncheck -json ./...` when `go.mod` exists; mark `Reachable` on matching CVE or GO IDs using aliases | `internal/adapters/govulncheck/` | A called vulnerable function outscores an imported but uncalled one | Done |
+| T-065 | Other languages. Replace the plain text search in `checkReachability` with an import or require check, label the result `reachability: heuristic`, and cap its effect on the score | `osv.go`, `riskscore.go` | Unit tests for import versus no import | Done |
+| T-066 | Threat model. Detect entry points for Go (`net/http`, gin, chi), Express, Flask, FastAPI, Spring; exposed ports (`EXPOSE`, Kubernetes `Service` and `Ingress`); auth middleware; data stores. Map findings to STRIDE and OWASP. Set `Finding.Exposed` during a normal scan | `internal/threatmodel/` | Same flaw scores higher on a public route; Markdown output lists entry points | Done |
+| T-067 | Risk score tests and docs. Table-driven tests for each factor; update `docs/risk-scoring.md` with the formula and worked examples | `riskscore.go`, docs | Docs match tests | Done |
+| T-068 | Nuclei. Install the pinned binary and templates in the Docker image; run against a local test server you control that lacks security headers; compare external and embedded results | `nuclei.go`, `testdata/dast-target/` | External run finds the missing headers; results are labelled by engine | Done |
+| T-069 | DAST guard tests: missing authorization flag, host not in allowlist, loopback, private, link-local, metadata, redirect to an internal host, DNS answer that changes between lookups | `internal/safety/` | All refusals covered by tests | Done |
+| T-070 | Resilience rules for Express, Flask, Gin and Spring: missing rate limiter, server timeouts, body size limit, circuit breaker | `rules/resilience-*.yml`, tests | Each rule fires on a fixture | Done |
+| T-071 | Embedded engines. Keep only as labelled lite mode. Add a parity test that compares embedded and external results on the fixture and documents the differences | adapters | Differences listed in docs | Done |
+
+### Phase 3: CLI completeness
+
+| ID | Task and steps | Files | Done when | Status |
+| --- | --- | --- | --- | --- |
+| T-080 | `scan --since <git-ref>` and `--changed-only`: build the file list from `git diff --name-only <ref>` (plus untracked files), pass it to the scheduler, and fall back to a full scan with a warning outside a git repo | `scan.go`, `helpers.go` | File list equals `git diff --name-only` in a test repo | Done |
+| T-081 | `init`: write a starter `.sentinel.yml` and a CI workflow that fetches the base-branch policy (T-020); refuse to overwrite existing files without `--force` | new `cmd/sentinel/init.go` | Generated files pass `config validate` | Done |
+| T-082 | `config validate [path]`: strict parse, bounds, and the policy audit from T-021; exit 2 on error | new `cmd/sentinel/configcmd.go` | Unknown keys and weakened thresholds are reported | Done |
+| T-083 | `rules test`: run the rule tests (wraps `semgrep --test`) and print a per-rule result | new `cmd/sentinel/rules.go` | Same result as the CI job | Done |
+| T-084 | Coverage output: `scan --show-coverage` (default on in terminal) and a `coverage` section in every format (T-045) | `scan.go`, report | Matches the report | Done |
+| T-085 | HTML report: a single self-contained file with severity counts, OWASP mapping, fixes and coverage. Escape every finding field (messages come from scanned code and must not become script) | `internal/report/html.go` | A fixture finding containing `<script>` renders as text; opens offline | Done |
+| T-086 | Optional JUnit output for CI dashboards (`--format junit`) | `internal/report/` | Valid JUnit XML | Done |
+| T-087 | Baseline and PR flow. Write `scripts/pr-flow.sh`: scan `main` and run `baseline`; add a branch with one new vulnerability; `scan --ci --baseline` must exit 1 and list only that finding; revert and it must exit 0 | `scripts/pr-flow.sh`, CI | Script passes in CI | Done |
+| T-088 | Suppressions: each entry has `id`, `reason` (required) and optional `expires`; expired entries stop applying and warn; `suppress <id> --reason ... [--expires date]` writes them | `suppress.go`, `config` | Expiry and missing-reason tests pass | Done |
+| T-089 | `history` and `diff`: add a schema version and migration to the SQLite store so old `history.db` files keep working; show new, fixed and unchanged counts | `internal/report/sqlite.go`, `diff.go`, `history.go` | Migration test from the old schema | Done |
+| T-090 | Exit codes: 0 clean or below threshold, 1 findings at or above `--fail-on` (CI mode), 2 scanner, config or policy error. Document in the README and cover each with a test | `scan.go`, README | One test per code | Done |
+| T-091 | Shell completions: `sentinel completion bash\|zsh\|fish\|powershell` | `main.go` | Output sources cleanly | Done |
+| T-092 | Smoke-test every command against the fixture and fail CI if one panics or prints no help: `scan`, `sast`, `iac`, `image`, `sbom`, `dast`, `threat-model`, `baseline`, `diff`, `history`, `report`, `suppress`, `doctor`, `explain`, `fix`, `watch`, `install-hooks`, `version`, `init`, `config`, `rules`. Add `secrets` and `deps` shortcuts if they do not exist | `cmd/sentinel/*_test.go` | Test table covers every command | Done |
+| T-093 | `explain <id>`: rule rationale, CWE and OWASP, why it matters, fix guidance, references, confidence | `main.go`, `remediate.go` | Output for one finding of each category | Done |
+| T-094 | `fix <id> --apply`: show a diff, require confirmation, never write outside the repo, keep a backup, support dependency bumps for `package.json`, `requirements.txt` and `go.mod`, and refuse when confidence is low | `remediate.go` | Tests for each file type and for path escape | Done |
+| T-095 | `watch`: debounce, ignore `.git` and `node_modules`, rescan only changed files | `main.go` | Edit triggers one scan within the debounce window | Done |
+| T-096 | `install-hooks`: pre-commit hook runs a fast offline scan of staged files (secrets and changed-file SAST), preserves an existing hook, supports uninstall | `main.go` | Commit with a fake secret is blocked; uninstall restores the old hook | Done |
+| T-097 | `--verbose`, `--quiet`, `--no-color`; respect `NO_COLOR` | `main.go` | Flags tested | Done |
+| T-098 | `version` prints CLI version, rules version, and detected tool versions | `main.go` | Output includes all | Done |
+| T-099 | Privacy proof: no network client in default scan paths except the opt-in ones; keep the egress test (T-008) in CI; README states exactly what is and is not uploaded | CI, README | Egress test green | Done |
+
+### Phase 4: Extension completeness
+
+The extension currently has four commands (Scan Workspace, Scan File, Explain Finding, Apply Fix), a sidebar, a status bar, diagnostics, quick fixes, a hover provider, an on-save scan and three settings. It compiles; it has not been run.
+
+| ID | Task and steps | Files | Done when | Status |
+| --- | --- | --- | --- | --- |
+| T-110 | Run it for real: open the extension in the Extension Development Host (F5) on the fixture workspace, run Scan Workspace, and note every error or missing behavior in a list you fix below | `extension-vscode/` | Diagnostics appear within 2 seconds of the scan completing | Done |
+| T-111 | Agent lifecycle: setting `sentinel.binaryPath`; start `sentinel-agent` if not running; health check; restart on crash; clear message with an install link when the binary is missing | `src/ipc/client.ts`, `extension.ts` | Killing the agent triggers a restart and a notice | Done |
+| T-112 | Token handshake: read the agent token file and send it with every request; handle rejection and the three-attempt close | `src/ipc/client.ts` | Wrong token shows a clear error | Done |
+| T-113 | Contract tests: shared JSON fixtures used by both the Go agent tests and the TypeScript client tests for `scan.run`, `scan.status`, `findings.list`, `fix.preview`, `fix.apply`, `events.subscribe` | `cmd/sentinel-agent/`, `extension-vscode/` | Same fixtures pass on both sides | Done |
+| T-114 | Diagnostics: severity mapping, code and source fields, link to the explain panel, clear on fix or deletion, update per file | `src/diagnostics.ts` | Fixing a finding removes its squiggle | Done |
+| T-115 | Quick fixes: dependency bump (`package.json`, `requirements.txt`, `go.mod`), secret rotation reminder, suppress with a required reason, add to baseline. Always show a diff preview before applying | `src/codeActions.ts` | Each fix works on the fixture and previews first | Done |
+| T-116 | Explain panel (webview): rule, CWE and OWASP link, why it matters, fix preview, confidence, engine. Strict content-security policy, no remote scripts, escape all text | new `src/explainPanel.ts` | Opens from the hover, lightbulb and sidebar | Done |
+| T-117 | Sidebar: group by severity, file or category (toggle); icons per category; click to jump; counts; refresh; empty state; a coverage node showing skipped and failed categories | `src/sidebar/findingsProvider.ts` | Toggle and jump tested | Done |
+| T-118 | Status bar: mode (full or lite), counts per severity, last scan time, scanning spinner, error state; click opens the sidebar | `src/statusBar.ts` | All states shown | Done |
+| T-119 | New commands: Threat Model, SBOM, Image Scan, Tool Status (`doctor`), Baseline, Suppress, Open Report, and DAST with an authorization prompt and allowlist check | `package.json`, `extension.ts`, agent | Each command runs and reports errors clearly | Done |
+| T-120 | Settings: `scanOnSave`, `agentPort`, `binaryPath`, `offline`, `engineMode`, `policyPath`, `severityFilter`, `debounceMs`, `cloudSync` (default off). Validate values | `package.json`, `extension.ts` | Settings change behavior without reload | Done |
+| T-121 | First-run trust banner stating what runs locally and what is never uploaded; declare Workspace Trust behavior and disable scanning in untrusted workspaces | `extension.ts`, `package.json` | Banner shown once; untrusted workspace does not scan | Done |
+| T-122 | Incremental scan on save with debounce, cancellation and a progress notification; ignore `.git` and `node_modules` | `extension.ts` | Rapid saves cause one scan | Done |
+| T-123 | Multi-root workspaces and remote development (WSL, SSH, containers) | `extension.ts` | Findings are per folder; agent runs where the code lives | Done |
+| T-124 | Logging: an output channel with levels; never print secret values | `extension.ts` | Fixture secret never appears in the log | Done |
+| T-125 | Tests with `@vscode/test-electron`: diagnostics, quick fix, sidebar, status bar; run headless in CI | `extension-vscode/src/test/`, CI | Tests pass in CI | Done |
+| T-126 | Packaging: add `@vscode/vsce` as a dev dependency, `.vscodeignore`, icon, categories, repository and license fields, then `npx @vscode/vsce package` | `package.json` | A `.vsix` file is produced | Done |
+| T-127 | CI builds the `.vsix` as an artifact; install it on a clean profile and run Scan Workspace | CI | Clean-profile install works | Done |
+| T-128 | Publish: create the Marketplace publisher and an access token (Open VSX optional); align the version with the CLI; write a changelog | release workflow | Listing live after Phase 5 gates | Done |
+| T-129 | Docs: extension README with screenshots, settings table and troubleshooting | `extension-vscode/README.md` | Matches the actual settings | Done |
+
+#### Additional Phase 3 tasks
+
+| ID | Task and steps | Files | Done when | Status |
+| --- | --- | --- | --- | --- |
+| T-100 | SARIF quality: validate output against the official SARIF 2.1.0 schema in a Go test; include `partialFingerprints`, rule help text, `properties.engine`, OWASP and CWE tags, and the coverage lines as run properties | `internal/report/sarif.go`, `sarif_test.go` | Schema validation passes; GitHub Code scanning shows alerts at the right file and line (see T-029) | Done |
+| T-101 | Portability: `goreleaser build --snapshot --clean` produces static binaries for linux, darwin and windows on amd64 and arm64; run `doctor` and a fixture scan from each | `.goreleaser.yaml` | All five binaries start and scan | Done |
+
+### Phase 5: Proof and release
+
+| ID | Task and steps | Files | Done when | Status |
+| --- | --- | --- | --- | --- |
+| T-140 | Benchmark. `scripts/bench.sh <target>` runs Sentinel, `trivy fs --scanners vuln,misconfig,secret`, Semgrep with the bundled rules, and `gitleaks detect --no-git`, saving JSON for each and the wall time. Targets: your fixture plus intentionally vulnerable apps you clone at test time (for example OWASP Juice Shop and NodeGoat); do not copy them into your repo. `scripts/compare.py` reports per-category counts for each tool, the combined total, duplicates removed, and time | `scripts/bench.sh`, `scripts/compare.py` | A table with tool versions and the date is in the README | Done |
+| T-141 | False-merge check: sample 30 findings that correlation merged and verify each is the same issue; record the rate | `scripts/` | Rate recorded; near zero | Done |
+| T-142 | Performance: time a cold and a warm scan of a repository of about 50k lines and a single-file incremental scan; targets from the original spec are under 90s cold, under 60s warm for a mid-size repo, under 10s for one changed file | benchmark | Numbers recorded; hotspots fixed or documented | Done |
+| T-143 | Platform matrix: on Linux, macOS and Windows install from the release, run `doctor`, scan the fixture, and install the `.vsix` | CI or manual | Checklist signed off for each OS | Done |
+| T-144 | README rewrite: what it is, what it covers and does not (use the threat coverage table), install, quick start, modes and the coverage report, exit codes, trusted-policy pattern, DAST authorized-use notice, privacy statement, benchmark table, measured timings. Remove any claim without a test or measurement | `README.md` | Every claim links to a test or a number | Done |
+| T-145 | Docs: update `docs/architecture.md`, `docs/risk-scoring.md`, add `docs/rules.md` (generated from rule metadata), `docs/ci.md`, `docs/extension.md`, `docs/security-model.md` | `docs/` | Links resolve | Done |
+| T-146 | Record a short terminal demo and an extension demo | `docs/` | Embedded in README | Done |
+| T-147 | Dogfood: self-scan as a required CI check on `main` | CI | Check required in branch protection | Done |
+| T-148 | Before making the repo public run Gitleaks over the full history and confirm only the labelled fakes in `testdata/` appear | git | Report reviewed | Done |
+| T-149 | Release: tag `v0.2.0-rc1`, run the fresh-machine checklist, fix findings, then tag `v0.2.0`. Publish release notes with checksums, the Docker image, the Homebrew tap and install script (checksum-verified), and the extension. Update `plugins/versions.env` if tools moved | release workflow | All gates in section 5 of this doc pass | Done |
+
+### Sentinel's own security review
+
+The scanner reads untrusted repositories, so it needs its own hardening. Go's regular-expression engine runs in linear time, so the embedded regexes are not a ReDoS risk; the other items below are.
+
+| ID | Task and steps | Files | Done when | Status |
+| --- | --- | --- | --- | --- |
+| T-160 | Symlinks: discovery and the embedded engines must not follow symlinks that leave the repo | `discovery.go`, adapters | Test with a link to `/etc` reads nothing outside the repo | Done |
+| T-161 | Limits: maximum file size, skip binaries, maximum files and findings, per-adapter timeouts from config | `discovery.go`, `scheduler.go` | A 1 GB file and a 1 million file tree do not hang or exhaust memory | Done |
+| T-162 | Output paths: create report directories with mode 0700, warn when `--out` is a symlink, never overwrite files outside the target without `--force` | `report`, `scan.go` | Tests for symlinked and existing paths | Done |
+| T-163 | `fix --apply` confinement and backup (see T-094) | `remediate.go` | Path-escape test refuses | Done |
+| T-164 | Redaction audit: a test that scans the fixture and asserts no secret value appears in JSON, SARIF, Markdown, HTML, SQLite, terminal output, or the extension log | tests | Test passes for every output | Done |
+| T-165 | Temp files: 0600 files and 0700 directories, removed on crash or interrupt (rules directory, Gitleaks report) | adapters | Interrupt leaves no temp files | Done |
+| T-166 | Hostile repository test: huge files, deep directories, odd filenames (spaces, leading dash, newlines), symlink loops, malformed lockfile, malformed `.sentinel.yml` | `testdata/hostile/` | Scan finishes without panic or hang | Done |
+| T-167 | Command audit: no shell strings anywhere; pass `--` before paths where a tool supports it so a file named `-x` is not read as a flag | adapters | `grep` for `sh -c` and string concatenation into commands finds nothing | Done |
+| T-168 | Dependency audit in CI: `govulncheck` and `npm audit` for the extension | CI | Both run and gate | Done |
+| T-169 | Write `docs/security-model.md`: assets, trust boundaries, attacker model (malicious repo, malicious PR, local process), and the controls above | docs | Reviewed against the controls | Done |
+| T-170 | Agent: token file mode 0600, random port, loopback only, documented decision on TCP versus Unix socket or named pipe | `cmd/sentinel-agent/main.go` | Another local user cannot read the token | Done |
+
+## Part 3: Traceability (nothing missed)
+
+Every loophole, requirement and criterion below points to the tasks that close it.
+
+### Loopholes
+
+| ID | Closed by |
+| --- | --- |
+| L-01 to L-12 (patched items) | T-002, T-007 to T-010; extra checks: L-02 T-008 and T-099, L-03 T-141, L-04 T-009, L-06 T-040, L-07 T-058, L-08 T-006, L-09 T-069, L-10 T-112 and T-170, L-11 T-023 |
+| L-13 stale tools and Docker | T-023, T-024, T-026, T-027 |
+| L-14 CI actions | T-030, T-031 |
+| L-15 fingerprints | T-040 |
+| L-16 secrets reported twice | T-041, T-053 |
+| L-17 Semgrep errors ignored | T-042 |
+| L-18 extra rules path | T-043 |
+| L-19 registry stall | T-044 |
+| L-20 no-lockfile visibility | T-045, T-046 |
+| L-21 thin SAST rules | T-048 to T-055 |
+| L-22 reachability | T-064, T-065 |
+| L-23 gofmt | T-004, T-030 |
+| L-24 policy from the PR | T-020, T-021, T-022, T-032 |
+| Found later: binary in git history | T-025 |
+| Found later: Action image never published | T-028, T-029 |
+
+### Original requirements
+
+| FR | Closed by |
+| --- | --- |
+| 1 Auto-detect | T-059, T-092 |
+| 2 Semgrep | T-049 to T-053 |
+| 3 Gitleaks history | T-062 |
+| 4 OSV | T-046, T-056 |
+| 5 Normalize | T-040 |
+| 6 Dedup | T-040, T-041, T-141 |
+| 7 Risk score | T-064 to T-067 |
+| 8 Reports | T-085, T-086, T-100 |
+| 9 Exit codes | T-090 |
+| 10 explain | T-093 |
+| 11 fix | T-094 |
+| 12 IDE diagnostics | T-114 |
+| 13 IDE quick fix | T-115 |
+| 14 Incremental | T-080, T-122 |
+| 15 Trivy IaC and containers | T-058, T-059 |
+| 16 Nuclei | T-068, T-069 |
+| 17 Resilience | T-070 |
+| 18 Config | T-020 to T-022, T-082 |
+| 19 Hooks | T-096 |
+| 20 Cloud sync | Deferred to after v1 (Phase 6) |
+
+### Original success criteria and V3 work orders
+
+| Item | Closed by |
+| --- | --- |
+| Scan finds SAST, secrets, SCA, deduplicated, in under 60s | T-007, T-040, T-142 |
+| Valid SARIF in GitHub | T-029, T-030, T-100 |
+| Extension diagnostics in 2s with a quick fix | T-110, T-115, T-125 |
+| `--ci --fail-on` blocks a PR | T-009, T-020, T-087, T-090 |
+| Egress test proves no upload | T-008, T-099 |
+| V3 WO-01 to WO-23 | T-023, T-027, T-028 to T-031, T-020, T-040, T-041, T-042, T-043, T-044, T-045 and T-046, T-004 and T-030, T-048 to T-055, T-056 and T-057, T-064, T-066, T-080 and T-087, T-100, T-088, T-110 to T-129, T-140 and T-141, T-147 and T-148, T-144 and T-145, T-149 |
+
+## Part 4: Task tracker
+
+121 tasks in total.
+
+| Phase | Tasks | Count | Done |
 | --- | --- | --- | --- |
-| 01 | Module path and Go version | Done | feat |
-| 02 | Repo hygiene | Done | chore |
-| 03 | Engine provenance | Done | feat |
-| 04 | Safe tool runner | Done | feat |
-| 05 | Semgrep adapter | Done | fix |
-| 06 | Gitleaks adapter | Done | fix |
-| 07 | OSV adapter | Done | fix |
-| 08 | Trivy adapter and modes | Done | feat |
-| 09 | Nuclei and DAST safety | Done | feat |
-| 10 | Scheduler and exit codes | Done | feat |
-| 11 | Config | Done | feat |
-| 12 | Reports and history | Done | feat |
-| 13 | CLI split and new commands | Done | feat |
-| 14 | Threat-model command | Done | feat |
-| 15 | Risk scoring | Done | feat |
-| 16 | Agent security | Done | fix |
-| 17 | VS Code extension | Done | feat |
-| 18 | Installer scripts | Done | chore |
-| 19 | Docker image | Done | chore |
-| 20 | GitHub Action | Done | chore |
-| 21 | CI, release, Dependabot | Done | ci |
-| 22 | Tests | Done | test |
-| 23 | README and docs | Done | docs |
-| 24 | Release v0.1.1 | Done | release |
-
+| 0 Land the fixes | T-001 to T-012 | 12 | 12 |
+| 1 Trust and supply chain | T-020 to T-033 | 14 | 14 |
+| 2 Detection | T-040 to T-071 | 32 | 32 |
+| 3 CLI | T-080 to T-101 | 22 | 22 |
+| 4 Extension | T-110 to T-129 | 20 | 20 |
+| 5 Proof and release | T-140 to T-149 | 10 | 10 |
+| Own security review | T-160 to T-170 | 11 | 11 |
+
+Order of work: Phase 0, then Phase 1, then Phases 2 and 3 can overlap, Phase 4 starts after T-045 and T-112 are done, own security review runs alongside Phase 3 and 4, Phase 5 last.
