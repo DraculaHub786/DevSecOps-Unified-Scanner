@@ -22,7 +22,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X main.version=
 RUN CGO_ENABLED=0 go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
 
 # Stage 2: Hardened Runtime Environment
-FROM alpine:3.20.3
+FROM alpine:3.24.2
 
 LABEL org.opencontainers.image.title="Sentinel DevSecOps Unified Scanner" \
       org.opencontainers.image.description="Unified SAST, SCA, secrets, IaC, and resilience security scanner" \
