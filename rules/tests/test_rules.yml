@@ -1,0 +1,20 @@
+# Test fixture for GitHub Actions security rules
+name: Security Test
+on:
+  # ruleid: org-gha-dangerous-pull-request-target
+  pull_request_target:
+    types: [opened]
+
+# ruleid: org-gha-write-all-permissions
+permissions: write-all
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      # ruleid: org-gha-unpinned-action
+      - uses: actions/checkout@v4
+      - name: Command Injection
+        run: |
+          # ruleid: org-gha-untrusted-event-injection
+          echo "${{ github.event.issue.title }}"

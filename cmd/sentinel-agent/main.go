@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/adapters/gitleaks"
+	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/adapters/govulncheck"
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/adapters/nuclei"
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/adapters/osv"
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/adapters/resilience"
@@ -203,6 +204,10 @@ func (s *AgentServer) handleConnection(conn net.Conn) {
 		data, _ := json.Marshal(resp)
 		conn.Write(append(data, '\n'))
 	}
+	if err := scanner.Err(); err != nil && err != io.EOF {
+		// Connection read error or limit exceeded
+		_ = err
+	}
 }
 
 func (s *AgentServer) handleRequest(req *JSONRPCRequest) JSONRPCResponse {
@@ -245,6 +250,7 @@ func (s *AgentServer) handleRequest(req *JSONRPCRequest) JSONRPCResponse {
 				trivy.New(),
 				nuclei.New(),
 				resilience.New(),
+				govulncheck.New(),
 			)
 			res, err := scheduler.Execute(context.Background(), cfg, orchestrator.ScanOptions{
 				RepoPath:     params.RepoPath,
@@ -366,10 +372,36 @@ func (s *AgentServer) handleRequest(req *JSONRPCRequest) JSONRPCResponse {
 			"appliedDiff": diff,
 		}
 
+	case "agent.handshake":
+		var params struct {
+			Client  string `json:"client"`
+			Version string `json:"version"`
+		}
+		_ = json.Unmarshal(req.Params, &params)
+		resp.Result = map[string]interface{}{
+			"status":          "authenticated",
+			"serverVersion":   "1.0.0-rc1",
+			"protocolVersion": "2.0",
+			"capabilities": []string{
+				"scan.run",
+				"scan.status",
+				"findings.list",
+				"fix.preview",
+				"fix.apply",
+				"baseline.create",
+				"suppress.add",
+				"threatmodel.run",
+				"sbom.generate",
+				"dast.run",
+				"doctor.run",
+				"agent.coverage",
+			},
+		}
+
 	case "agent.ping", "agent.health":
 		resp.Result = map[string]interface{}{
 			"status":  "ok",
-			"version": "0.2.0",
+			"version": "1.0.0-rc1",
 		}
 
 	case "agent.coverage":

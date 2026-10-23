@@ -165,6 +165,9 @@ func (s *SQLiteStore) ListScans() ([]ScanHistoryRecord, error) {
 		r.FinishedAt, _ = time.Parse(time.RFC3339, finStr)
 		records = append(records, r)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return records, nil
 }
 
@@ -189,6 +192,9 @@ func (s *SQLiteStore) CompareScans(scanA, scanB int64) (*DiffResult, error) {
 			if err := rows.Scan(&f.ID, &f.Fingerprint, &f.Engine, &f.Category, &f.Severity, &f.File, &f.LineStart, &f.RiskScore); err == nil {
 				res[f.Fingerprint] = f
 			}
+		}
+		if err := rows.Err(); err != nil {
+			return nil, err
 		}
 		return res, nil
 	}
@@ -285,6 +291,9 @@ func (s *SQLiteStore) GetBaseline() ([]string, error) {
 		if err := rows.Scan(&fp); err == nil && fp != "" {
 			fps = append(fps, fp)
 		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return fps, nil
 }

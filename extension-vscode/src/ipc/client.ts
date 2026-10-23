@@ -122,6 +122,10 @@ export class AgentClient {
         return this.sendRequest<{ success: boolean; appliedDiff: string }>('fix.apply', { repoPath, findingId });
     }
 
+    async handshake(clientVersion: string = '1.0.0'): Promise<{ status: string; serverVersion: string; capabilities: string[]; protocolVersion: string }> {
+        return this.sendRequest<{ status: string; serverVersion: string; capabilities: string[]; protocolVersion: string }>('agent.handshake', { client: 'vscode', version: clientVersion });
+    }
+
     async ping(): Promise<{ status: string; version: string }> {
         return this.sendRequest<{ status: string; version: string }>('agent.ping', {});
     }

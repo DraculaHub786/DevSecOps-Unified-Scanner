@@ -1,0 +1,48 @@
+rules:
+  - id: org-supplychain-docker-latest-tag
+    patterns:
+      - pattern-regex: '(?i)^\s*FROM\s+([^\s:]+)(?::latest)?\s*$'
+    message: Docker base image uses ':latest' or untagged version; pin exact digest or semver tag.
+    severity: WARNING
+    languages: [dockerfile]
+    metadata:
+      cwe: "CWE-1188"
+      owasp: "A05:2021-Security Misconfiguration"
+      category: "iac"
+      confidence: "high"
+
+  - id: org-supplychain-curl-pipe-sh
+    patterns:
+      - pattern-regex: '(?i)(?:curl|wget)\s+[^|;`\n]+\|\s*(?:sh|bash)'
+    message: Insecure download pipe to shell ('curl | sh' or 'wget | bash') bypasses integrity checks and allows arbitrary remote execution.
+    severity: ERROR
+    languages: [bash, dockerfile]
+    metadata:
+      cwe: "CWE-494"
+      owasp: "A08:2021-Software and Data Integrity Failures"
+      category: "iac"
+      confidence: "high"
+
+  - id: org-supplychain-npm-lifecycle-script
+    patterns:
+      - pattern-regex: '"(?:preinstall|postinstall)"\s*:\s*"[^"]+"'
+    message: Risky lifecycle script ('preinstall' or 'postinstall') executes arbitrary code upon package installation.
+    severity: WARNING
+    languages: [json]
+    metadata:
+      cwe: "CWE-829"
+      owasp: "A08:2021-Software and Data Integrity Failures"
+      category: "sast"
+      confidence: "high"
+
+  - id: org-supplychain-npm-wildcard-dependency
+    patterns:
+      - pattern-regex: '"[a-zA-Z0-9@/._-]+"\s*:\s*"(?:\*|latest)"'
+    message: Package dependency uses wildcard '*' or 'latest' instead of pinned or bounded semver range.
+    severity: WARNING
+    languages: [json]
+    metadata:
+      cwe: "CWE-1357"
+      owasp: "A08:2021-Software and Data Integrity Failures"
+      category: "sast"
+      confidence: "high"

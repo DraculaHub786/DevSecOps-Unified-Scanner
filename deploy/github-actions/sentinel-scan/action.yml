@@ -1,29 +1,32 @@
 name: 'Sentinel DevSecOps Scanner'
-description: 'Unified SAST, SCA, secrets, IaC and resilience scan that writes SARIF'
+description: 'Unified SAST, SCA, secrets, IaC, and resilience scanner with automated SARIF generation'
 author: 'DraculaHub786'
-# Usage in workflow:
-#   permissions:
-#     contents: read
-#     security-events: write
-#   steps:
-#     - uses: actions/checkout@v4
-#     - uses: DraculaHub786/DevSecOps-Unified-Scanner/deploy/github-actions/sentinel-scan@v0.1.2
-#     - uses: github/codeql-action/upload-sarif@v3
-#       if: always()
-#       with:
-#         sarif_file: results.sarif
+
 inputs:
   fail-on:
-    description: 'Fail at or above this severity (critical, high, medium, low)'
+    description: 'Fail at or above this severity threshold (critical, high, medium, low)'
     required: false
     default: 'high'
   path:
-    description: 'Directory to scan'
+    description: 'Repository directory path to scan'
     required: false
     default: '.'
+  format:
+    description: 'Output format (sarif, json, terminal, markdown)'
+    required: false
+    default: 'sarif'
+  out:
+    description: 'Output file destination'
+    required: false
+    default: 'results.sarif'
+  offline:
+    description: 'Execute in strict offline mode with zero network egress'
+    required: false
+    default: 'false'
+
 runs:
   using: 'docker'
-  image: 'docker://ghcr.io/draculahub786/devsecops-unified-scanner:latest'
+  image: 'docker://ghcr.io/draculahub786/devsecops-unified-scanner:v1.0.1'
   args:
     - 'scan'
     - ${{ inputs.path }}
@@ -31,6 +34,6 @@ runs:
     - '--fail-on'
     - ${{ inputs.fail-on }}
     - '--format'
-    - 'sarif'
+    - ${{ inputs.format }}
     - '--out'
-    - 'results.sarif'
+    - ${{ inputs.out }}

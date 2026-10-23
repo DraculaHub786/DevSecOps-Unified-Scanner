@@ -1,0 +1,5 @@
+apiVersion: v2
+name: vulnerable-chart
+description: A Helm chart with security misconfigurations for Sentinel testing
+version: 0.1.0
+appVersion: "1.0.0"

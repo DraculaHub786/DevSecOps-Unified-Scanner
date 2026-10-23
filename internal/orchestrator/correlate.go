@@ -40,8 +40,11 @@ func CorrelateAndDeduplicate(findings []Finding) []Finding {
 
 		// Construct primary key
 		var key string
-		if f.CVE != "" && f.File != "" {
-			key = fmt.Sprintf("cve:%s:%s:%d", strings.ToUpper(f.CVE), f.File, f.LineStart)
+		if f.Category == CategorySecret && f.File != "" && f.LineStart > 0 {
+			key = fmt.Sprintf("secret:%s:%d", f.File, f.LineStart)
+		} else if f.CVE != "" && f.File != "" {
+			// For SCA dependencies, key by CVE and manifest file (deduplicating across OSV, Trivy, govulncheck)
+			key = fmt.Sprintf("cve:%s:%s", strings.ToUpper(f.CVE), f.File)
 		} else {
 			key = fmt.Sprintf("fp:%s", f.Fingerprint)
 		}
@@ -60,9 +63,14 @@ func CorrelateAndDeduplicate(findings []Finding) []Finding {
 			existing.Severity = f.Severity
 		}
 
-		// 2. Combine sources (e.g. "osv+trivy")
+		// 2. Combine sources (e.g. "gitleaks+semgrep", "osv+trivy", "osv+govulncheck")
 		if !strings.Contains(existing.Source, f.Source) {
 			existing.Source = fmt.Sprintf("%s+%s", existing.Source, f.Source)
+		}
+
+		// 3. Ensure secret category is retained if either engine identified it as secret
+		if f.Category == CategorySecret {
+			existing.Category = CategorySecret
 		}
 
 		// 3. Keep highest CVSS
@@ -87,10 +95,21 @@ func CorrelateAndDeduplicate(findings []Finding) []Finding {
 			}
 		}
 
-		// 6. Inherit reachability if known
-		if existing.Reachable == nil && f.Reachable != nil {
+		// 6. Inherit reachability if known; govulncheck proven reachability takes precedence
+		if f.Source == "govulncheck" && f.Reachable != nil {
+			existing.Reachable = f.Reachable
+			if f.Snippet != "" {
+				existing.Snippet = f.Snippet
+			}
+			if strings.Contains(f.Message, "Reachability:") {
+				existing.Message = f.Message
+			}
+		} else if strings.Contains(existing.Source, "govulncheck") && existing.Reachable != nil {
+			// existing already has proven reachability from govulncheck
+		} else if existing.Reachable == nil && f.Reachable != nil {
 			existing.Reachable = f.Reachable
 		}
+
 		if existing.Exposed == nil && f.Exposed != nil {
 			existing.Exposed = f.Exposed
 		}
@@ -103,7 +122,9 @@ func CorrelateAndDeduplicate(findings []Finding) []Finding {
 
 	result := make([]Finding, 0, len(order))
 	for _, k := range order {
-		result = append(result, *merged[k])
+		item := merged[k]
+		item.RiskScore = CalculateRiskScore(item)
+		result = append(result, *item)
 	}
 
 	return result

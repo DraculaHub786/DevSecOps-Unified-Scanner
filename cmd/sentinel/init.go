@@ -74,7 +74,7 @@ jobs:
           fi
 
       - name: Run Sentinel Scan
-        uses: DraculaHub786/DevSecOps-Unified-Scanner/deploy/github-actions/sentinel-scan@v0.1.2
+        uses: DraculaHub786/DevSecOps-Unified-Scanner/deploy/github-actions/sentinel-scan@v%s
         with:
           fail-on: "high"
           upload-sarif: "true"
@@ -120,7 +120,8 @@ func newInitCmd() *cobra.Command {
 				return fmt.Errorf("error writing %s: %w", configPath, err)
 			}
 
-			if err := os.WriteFile(workflowPath, []byte(starterWorkflow), 0644); err != nil {
+			renderedWorkflow := fmt.Sprintf(starterWorkflow, version)
+			if err := os.WriteFile(workflowPath, []byte(renderedWorkflow), 0644); err != nil {
 				return fmt.Errorf("error writing %s: %w", workflowPath, err)
 			}
 

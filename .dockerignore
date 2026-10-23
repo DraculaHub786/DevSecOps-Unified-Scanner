@@ -1,17 +1,43 @@
+# =========================================================================
+# Sentinel Docker Ignore - Build Context Exclusions
+# =========================================================================
+
+# VCS and CI configurations
 .git
 .github
+.vscode
+
+# Node modules & Extension build artifacts
 node_modules
 */node_modules
-plugins/gitleaks*
-plugins/osv-scanner*
-plugins/trivy*
-plugins/nuclei*
-plugins/semgrep*
+extension-vscode/
+*.vsix
+
+# Local binaries and downloads
 bin/
 dist/
 build/
 *.exe
 *.test
+*.out
+plugins/gitleaks*
+plugins/osv-scanner*
+plugins/trivy*
+plugins/nuclei*
+plugins/semgrep*
+
+# Scans, reports, and databases
 **/.sentinel/
+*.sarif
+*.cdx.json
 results.sarif
 summary.md
+
+# Environment and sensitive keys
+.env*
+*.pem
+*.key
+
+# Test and benchmark scratch
+testdata/hostile/
+*.log

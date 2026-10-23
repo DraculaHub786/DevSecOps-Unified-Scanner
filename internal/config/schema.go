@@ -133,6 +133,7 @@ func DefaultConfig() *Config {
 				".git/**",
 				"**/.sentinel/**",
 				"testdata/**",
+				"rules/tests/**",
 				"**/*_test.go",
 			},
 			Findings: []FindingSuppression{},

@@ -3,7 +3,6 @@ package gitleaks
 import (
 	"bufio"
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -287,6 +286,9 @@ func (a *GitleaksAdapter) runNativeFallback(repoPath string, cfg *config.Config)
 				}
 			}
 		}
+		if err := scanner.Err(); err != nil {
+			return nil
+		}
 
 		return nil
 	})
@@ -295,13 +297,7 @@ func (a *GitleaksAdapter) runNativeFallback(repoPath string, cfg *config.Config)
 }
 
 func redactSecret(secret string) string {
-	if len(secret) <= 6 {
-		h := sha256.Sum256([]byte(secret))
-		return fmt.Sprintf("sha256:%x", h[:4])
-	}
-	prefix := secret[:3]
-	suffix := secret[len(secret)-3:]
-	return fmt.Sprintf("%s%s%s", prefix, strings.Repeat("*", len(secret)-6), suffix)
+	return orchestrator.RedactSecret(secret)
 }
 
 func discoveryHasGit(repoPath string) bool {

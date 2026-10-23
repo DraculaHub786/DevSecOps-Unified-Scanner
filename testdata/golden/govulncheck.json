@@ -1,0 +1,6 @@
+{"config":{"protocol_version":"v1.0.0"}}
+{"progress":{"message":"Scanning your code and dependencies..."}}
+{"osv":{"id":"GO-2023-1571","aliases":["CVE-2023-24538"],"summary":"HTML/template: backticks do not delimit CSS strings in html/template"}}
+{"finding":{"osv":"GO-2023-1571","fixed_version":"v1.20.3","trace":[{"module":"github.com/DraculaHub786/DevSecOps-Unified-Scanner","package":"main","function":"main","position":{"filename":"cmd/sentinel/main.go","line":42,"column":2}},{"module":"html/template","package":"html/template","function":"Parse","position":{"filename":"src/html/template/template.go","line":105,"column":6}}]}}
+{"osv":{"id":"GO-2022-0969","aliases":["CVE-2022-27191"],"summary":"Crash in golang.org/x/crypto/ssh due to unhandled key exchange"}}
+{"finding":{"osv":"GO-2022-0969","fixed_version":"v0.0.0-20220315160706-3147a52a75dd","trace":[{"module":"golang.org/x/crypto","package":"golang.org/x/crypto/ssh"}]}}

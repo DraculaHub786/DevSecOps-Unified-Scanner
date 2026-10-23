@@ -20,6 +20,7 @@ $OsvVer = if ($Versions.ContainsKey("OSV_VERSION")) { $Versions["OSV_VERSION"] }
 $TrivyVer = if ($Versions.ContainsKey("TRIVY_VERSION")) { $Versions["TRIVY_VERSION"] } else { "0.76.0" }
 $NucleiVer = if ($Versions.ContainsKey("NUCLEI_VERSION")) { $Versions["NUCLEI_VERSION"] } else { "3.3.8" }
 $SemgrepVer = if ($Versions.ContainsKey("SEMGREP_VERSION")) { $Versions["SEMGREP_VERSION"] } else { "1.182.0" }
+$GovulncheckVer = if ($Versions.ContainsKey("GOVULNCHECK_VERSION")) { $Versions["GOVULNCHECK_VERSION"] } else { "1.1.4" }
 
 $ChecksumFile = Join-Path $PluginDir "checksums.txt"
 $ChecksumMap = @{}
@@ -75,7 +76,7 @@ try {
 }
 
 # 2. OSV-Scanner
-$OsvFile = "osv-scanner_${OsvVer}_windows_amd64.exe"
+$OsvFile = "osv-scanner_windows_amd64.exe"
 $OsvUrl = "https://github.com/google/osv-scanner/releases/download/v${OsvVer}/$OsvFile"
 $OsvDest = Join-Path $PluginDir "osv-scanner.exe"
 try {
@@ -118,4 +119,16 @@ if (Get-Command pip -ErrorAction SilentlyContinue) {
     }
 }
 
+# 6. govulncheck
+if (Get-Command go -ErrorAction SilentlyContinue) {
+    try {
+        Write-Host "📦 Installing pinned govulncheck via go install (v$GovulncheckVer)..." -ForegroundColor Cyan
+        $env:GOBIN = $PluginDir
+        go install "golang.org/x/vuln/cmd/govulncheck@v$GovulncheckVer"
+    } catch {
+        Write-Warning "Failed to install govulncheck via go install: $_"
+    }
+}
+
 Write-Host "🎉 Scanner binaries setup complete." -ForegroundColor Green
+

@@ -105,3 +105,14 @@ func SeverityRank(sev string) int {
 		return 0
 	}
 }
+
+// RedactSecret masks a sensitive secret value for safe reporting.
+func RedactSecret(secret string) string {
+	if len(secret) <= 6 {
+		h := sha256.Sum256([]byte(secret))
+		return fmt.Sprintf("sha256:%x", h[:4])
+	}
+	prefix := secret[:3]
+	suffix := secret[len(secret)-3:]
+	return fmt.Sprintf("%s%s%s", prefix, strings.Repeat("*", len(secret)-6), suffix)
+}

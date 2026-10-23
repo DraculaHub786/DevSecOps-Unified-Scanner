@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/adapters/gitleaks"
+	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/adapters/govulncheck"
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/adapters/nuclei"
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/adapters/osv"
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/adapters/resilience"
@@ -45,6 +46,7 @@ func newExplainCmd() *cobra.Command {
 				trivy.New(),
 				nuclei.New(),
 				resilience.New(),
+				govulncheck.New(),
 			)
 
 			result, err := scheduler.Execute(context.Background(), cfg, orchestrator.ScanOptions{RepoPath: repoPath})
@@ -121,6 +123,7 @@ func newFixCmd() *cobra.Command {
 				trivy.New(),
 				nuclei.New(),
 				resilience.New(),
+				govulncheck.New(),
 			)
 
 			result, err := scheduler.Execute(context.Background(), cfg, orchestrator.ScanOptions{RepoPath: repoPath})
@@ -224,6 +227,7 @@ func newWatchCmd() *cobra.Command {
 						semgrep.New(),
 						trivy.New(),
 						resilience.New(),
+						govulncheck.New(),
 					)
 					res, err := scheduler.Execute(context.Background(), cfg, orchestrator.ScanOptions{
 						RepoPath:     absTarget,
@@ -280,7 +284,7 @@ func newVersionCmd() *cobra.Command {
 		Short: "Print Sentinel version and scanner engine availability",
 		Run: func(cmd *cobra.Command, args []string) {
 			fmt.Printf("Sentinel DevSecOps Unified Scanner v%s (commit: %s, built: %s)\n", version, commit, date)
-			fmt.Println("Rules: embedded v1 (40 SAST rules, 4 resilience rules)")
+			fmt.Println("Rules: embedded v1 (65 rules: 55 SAST, 4 resilience, 2 GitHub Actions, 4 supply chain)")
 			fmt.Println("\nDetected Scanner Engines:")
 			statuses := doctor.CheckEngines()
 			for _, s := range statuses {

@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/adapters/gitleaks"
+	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/adapters/govulncheck"
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/adapters/nuclei"
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/adapters/osv"
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/adapters/resilience"
@@ -48,6 +49,7 @@ func newBaselineCmd() *cobra.Command {
 				trivy.New(),
 				nuclei.New(),
 				resilience.New(),
+				govulncheck.New(),
 			)
 
 			fmt.Println("🔍 Scanning repository to establish security baseline...")

@@ -7,11 +7,11 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@3041bf56c941b3916172d454dcd8f81a51be6948 # v5.2.0
         with:
           go-version-file: go.mod
 
@@ -24,14 +24,17 @@ jobs:
             exit 1
           fi
 
+      - name: Scanner Checksum Consistency Validation
+        run: bash scripts/verify-checksums.sh
+
       - name: Go Vet
         run: go vet ./...
 
       - name: Run Tests with Race Detector
         run: go test -race ./...
 
-      - name: Vulnerability Check (govulncheck)
-        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+      - name: Vulnerability Check (govulncheck - pinned v1.1.4)
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
 
       - name: Build Sentinel Binary
         run: go build -o bin/sentinel ./cmd/sentinel
@@ -54,8 +57,8 @@ jobs:
         goos: [linux, darwin, windows]
         goarch: [amd64, arm64]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@3041bf56c941b3916172d454dcd8f81a51be6948 # v5.2.0
         with:
           go-version-file: go.mod
       - name: Cross-compile Sentinel (${{ matrix.goos }}/${{ matrix.goarch }})
@@ -71,11 +74,11 @@ jobs:
       contents: read
       security-events: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@3041bf56c941b3916172d454dcd8f81a51be6948 # v5.2.0
         with:
           go-version-file: go.mod
 
@@ -88,15 +91,15 @@ jobs:
 
       - name: Upload SARIF to GitHub Code Scanning
         if: always()
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@9e8d0789d4a0fa618460e0086ab2d3ea880a416e # v3.26.0
         with:
           sarif_file: results.sarif
 
   extension-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@1e60f671b9cdc0f2d343334fe049ceb554f310bc # v4.2.0
         with:
           node-version: 20
       - name: Install dependencies
@@ -107,10 +110,9 @@ jobs:
         run: npm test
       - name: Package extension (.vsix)
         working-directory: extension-vscode
-        run: npx @vscode/vsce package --no-dependencies
+        run: npm run package
       - name: Upload VSIX Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf6581a12fe429c0b151 # v4.4.3
         with:
           name: sentinel-vscode-extension
           path: extension-vscode/*.vsix
-

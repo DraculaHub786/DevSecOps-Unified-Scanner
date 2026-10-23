@@ -8,6 +8,7 @@ import { SentinelCodeActionProvider } from './codeActions';
 import { FindingsTreeProvider } from './sidebar/findingsProvider';
 import { SentinelStatusBar } from './statusBar';
 import { ExplainPanel } from './explainPanel';
+import { buildFindingHover } from './hover';
 
 let agentClient: AgentClient;
 let diagnosticsManager: DiagnosticsManager;
@@ -80,21 +81,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 });
 
                 if (matched) {
-                    const md = new vscode.MarkdownString();
-                    md.appendMarkdown(`### 🛡️ Sentinel: ${matched.rule}\n\n`);
-                    const engineLabel = matched.engine === 'embedded' ? '⚡ Embedded Lite Engine' : '🔬 External Tool (Production)';
-                    md.appendMarkdown(`**Engine:** \`${engineLabel}\`\n\n`);
-                    md.appendMarkdown(`**Severity:** \`${matched.severity.toUpperCase()}\` | **Category:** \`${matched.category}\` | **Risk Score:** \`${matched.risk_score}/100\`\n\n`);
-                    md.appendMarkdown(`${matched.message}\n\n`);
-                    if (matched.cwe) {
-                        md.appendMarkdown(`[View ${matched.cwe} Advisory](https://cwe.mitre.org/data/definitions/${matched.cwe.replace(/^CWE-/, '')}.html)\n\n`);
-                    }
-                    if (matched.fix_suggestion) {
-                        md.appendMarkdown(`💡 **Quick Fix:** *${matched.fix_suggestion.description}*\n\n`);
-                    }
-                    md.appendMarkdown(`[Explain Finding](command:sentinel.showFindingDetails?${encodeURIComponent(JSON.stringify(matched.id))})`);
-                    md.isTrusted = true;
-                    return new vscode.Hover(md);
+                    return new vscode.Hover(buildFindingHover(matched));
                 }
                 return null;
             }
@@ -256,19 +243,35 @@ function registerCommands(context: vscode.ExtensionContext) {
 
             try {
                 const preview = await agentClient.previewFix(root, findingId);
-                const confirm = await vscode.window.showInformationMessage(
-                    `Apply fix for ${findingId}?\n${preview.description}`,
-                    { modal: true, detail: preview.diff || 'Automatic code remediation' },
-                    'Apply Fix'
+                const choice = await vscode.window.showInformationMessage(
+                    `Sentinel Remediation: ${preview.description}`,
+                    { modal: true, detail: preview.diff || 'No unified diff available' },
+                    'Apply Fix',
+                    'Preview Diff'
                 );
 
-                if (confirm === 'Apply Fix') {
-                    const result = await agentClient.applyFix(root, findingId);
-                    if (result.success) {
-                        vscode.window.showInformationMessage(`✅ Fix applied successfully.`);
-                        logInfo(`Applied automated fix for ${findingId}`);
-                        await runScan(true);
+                if (choice === 'Preview Diff' && preview.diff) {
+                    const diffDoc = await vscode.workspace.openTextDocument({
+                        content: preview.diff,
+                        language: 'diff'
+                    });
+                    await vscode.window.showTextDocument(diffDoc, { preview: true });
+                    const postChoice = await vscode.window.showInformationMessage(
+                        `Apply remediation after previewing diff?`,
+                        'Apply Fix'
+                    );
+                    if (postChoice !== 'Apply Fix') {
+                        return;
                     }
+                } else if (choice !== 'Apply Fix') {
+                    return;
+                }
+
+                const result = await agentClient.applyFix(root, findingId);
+                if (result.success) {
+                    vscode.window.showInformationMessage(`✅ Fix applied successfully.`);
+                    logInfo(`Applied automated fix for ${findingId}`);
+                    await runScan(true);
                 }
             } catch (err: any) {
                 vscode.window.showErrorMessage(`Failed to apply fix: ${err.message}`);

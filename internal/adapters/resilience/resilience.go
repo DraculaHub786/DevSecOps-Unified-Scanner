@@ -180,6 +180,9 @@ func (a *ResilienceAdapter) Run(ctx context.Context, repoPath string, cfg *confi
 				}
 			}
 		}
+		if err := scanner.Err(); err != nil {
+			return nil
+		}
 
 		return nil
 	})

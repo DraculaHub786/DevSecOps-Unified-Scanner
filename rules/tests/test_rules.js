@@ -44,4 +44,8 @@ function testJS(req, res, db, input) {
 
   // ruleid: org-js-raw-innerhtml-xss
   document.getElementById('app').innerHTML = input;
+
+  // ruleid: org-js-ssti-ejs
+  ejs.render(input, {});
 }
+

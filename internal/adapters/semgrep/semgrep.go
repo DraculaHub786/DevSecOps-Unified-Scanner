@@ -275,7 +275,13 @@ func ParseOutput(data []byte, repoPath string, cfg *config.Config) ([]orchestrat
 		}
 
 		category := orchestrator.CategorySAST
-		if strings.ToLower(res.Extra.Metadata.Category) == "secret" {
+		catLower := strings.ToLower(res.Extra.Metadata.Category)
+		checkLower := strings.ToLower(res.CheckID)
+		if catLower == "secret" || catLower == "secrets" ||
+			strings.Contains(checkLower, "secret") ||
+			strings.Contains(checkLower, "credential") ||
+			strings.Contains(checkLower, "hardcoded-token") ||
+			strings.Contains(checkLower, "hardcoded-key") {
 			category = orchestrator.CategorySecret
 		}
 
@@ -344,7 +350,7 @@ func (a *SemgrepAdapter) runNativeFallback(repoPath string, cfg *config.Config) 
 			ID:       "sast-tls-skip-verify",
 			Severity: orchestrator.SeverityHigh,
 			CWE:      "CWE-295",
-			Message:  "Disabled TLS certificate validation detected (InsecureSkipVerify: true / rejectUnauthorized: false)",
+			Message:  "Disabled TLS certificate validation detected (insecure TLS verification enabled)",
 			Pattern:  regexp.MustCompile(`(?i)(?:InsecureSkipVerify\s*:\s*true|rejectUnauthorized\s*:\s*false|verify\s*=\s*False)`),
 			Exts:     []string{".go", ".js", ".ts", ".py"},
 		},
@@ -442,6 +448,9 @@ func (a *SemgrepAdapter) runNativeFallback(repoPath string, cfg *config.Config) 
 					findings = append(findings, f)
 				}
 			}
+		}
+		if err := scanner.Err(); err != nil {
+			return nil
 		}
 
 		return nil

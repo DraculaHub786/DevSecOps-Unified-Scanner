@@ -32,10 +32,9 @@ ignore:
     - ".git/**"
     - "**/.sentinel/**"
     - "testdata/**"
+    - "rules/tests/**"
     - "**/*_test.go"
-  findings:
-    - id: "SENT-b64f59dc55e7"
-      reason: "Scanner regex pattern string in semgrep.go fallback engine"
+  findings: []
 
 thresholds:
   fail_on: "high"

@@ -61,6 +61,12 @@ func bad(db *sql.DB, input string, r *http.Request) {
 
 	// ruleid: org-bounded-request-body
 	_, _ = io.ReadAll(r.Body)
+
+	// ruleid: org-go-cookie-missing-httponly-secure
+	_ = &http.Cookie{Name: "session", Value: "123", HttpOnly: false}
+
+	// ruleid: org-go-open-redirect
+	http.Redirect(nil, r, r.URL.Query().Get("url"), http.StatusFound)
 }
 
 func ok(db *sql.DB, input string) {

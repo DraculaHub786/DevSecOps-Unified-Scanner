@@ -124,8 +124,17 @@ func Discover(repoPath string) (*DiscoveryResult, error) {
 			iacSet[rel] = true
 			langSet["terraform"] = true
 		}
-		if strings.HasSuffix(baseName, ".k8s.yaml") || strings.HasSuffix(baseName, ".k8s.yml") {
+		if strings.HasSuffix(baseName, ".k8s.yaml") || strings.HasSuffix(baseName, ".k8s.yml") ||
+			strings.HasPrefix(baseName, "k8s-") || strings.Contains(rel, "k8s") {
 			iacSet[rel] = true
+		}
+		if strings.HasPrefix(baseName, "docker-compose") || strings.HasPrefix(baseName, "compose.") {
+			iacSet[rel] = true
+		}
+		if baseName == "chart.yaml" || strings.Contains(rel, "templates/") || strings.Contains(rel, "helm") {
+			if strings.HasSuffix(baseName, ".yaml") || strings.HasSuffix(baseName, ".yml") {
+				iacSet[rel] = true
+			}
 		}
 		if (strings.HasSuffix(baseName, ".yml") || strings.HasSuffix(baseName, ".yaml")) && strings.Contains(rel, ".github/workflows") {
 			iacSet[rel] = true

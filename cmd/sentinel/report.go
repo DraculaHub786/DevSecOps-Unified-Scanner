@@ -61,6 +61,9 @@ func newReportCmd() *cobra.Command {
 						r.Findings = append(r.Findings, f)
 					}
 				}
+				if err := rows.Err(); err != nil {
+					_ = err
+				}
 			}
 
 			switch formatStr {

@@ -1,0 +1,15 @@
+name: Vulnerable Workflow
+on:
+  pull_request_target:
+    types: [opened, synchronize]
+
+permissions: write-all
+
+jobs:
+  exploit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Greet Contributor
+        run: |
+          echo "Title: ${{ github.event.issue.title }}"

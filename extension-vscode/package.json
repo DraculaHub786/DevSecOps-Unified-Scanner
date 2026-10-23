@@ -2,7 +2,7 @@
   "name": "sentinel-vscode",
   "displayName": "Sentinel DevSecOps Unified Scanner",
   "description": "Unified SAST, SCA, secrets, IaC, and resilience scanner with inline diagnostics and auto-remediation.",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "publisher": "draculahub786",
   "license": "Apache-2.0",
   "icon": "media/shield.png",
@@ -218,11 +218,12 @@
     "build": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "test": "tsc -p ./ && node ./dist/test/unit.test.js",
-    "package": "npx @vscode/vsce package --no-dependencies"
+    "package": "vsce package --no-dependencies"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
     "@types/vscode": "^1.80.0",
+    "@vscode/vsce": "2.24.0",
     "typescript": "^5.3.3"
   }
 }

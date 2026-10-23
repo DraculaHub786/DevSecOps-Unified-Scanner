@@ -1,0 +1,49 @@
+rules:
+  - id: org-gha-dangerous-pull-request-target
+    patterns:
+      - pattern-regex: '(?i)^\s*pull_request_target:'
+    message: Workflow uses dangerous 'pull_request_target' trigger; this may execute untrusted code with repository secret access.
+    severity: ERROR
+    languages: [yaml]
+    metadata:
+      cwe: "CWE-284"
+      owasp: "A05:2021-Security Misconfiguration"
+      category: "iac"
+      confidence: "high"
+
+  - id: org-gha-write-all-permissions
+    patterns:
+      - pattern-regex: '(?i)permissions:\s*write-all'
+    message: Overly broad workflow permission 'write-all' detected; enforce least-privilege permissions.
+    severity: ERROR
+    languages: [yaml]
+    metadata:
+      cwe: "CWE-732"
+      owasp: "A05:2021-Security Misconfiguration"
+      category: "iac"
+      confidence: "high"
+
+  - id: org-gha-unpinned-action
+    patterns:
+      - pattern-regex: '(?i)^\s*(?:-\s*)?uses:\s*([a-zA-Z0-9_\-\/]+)@(?!(?:[0-9a-fA-F]{40}))([^\s]+)'
+    message: GitHub Action reference is not pinned to a full 40-character commit SHA.
+    severity: WARNING
+    languages: [yaml]
+    metadata:
+      cwe: "CWE-1357"
+      owasp: "A05:2021-Security Misconfiguration"
+      category: "iac"
+      confidence: "high"
+
+  - id: org-gha-untrusted-event-injection
+    patterns:
+      - pattern-regex: '(?i)\$\{\{\s*github\.event\.(?:issue|pull_request|comment|head_commit|review|discussion)\.(?:title|body|message|head\.ref|author_association)'
+      - pattern-not-regex: '(?i)^\s*(?!(?:run|uses|with)\b)[a-zA-Z0-9_-]+:\s*\$\{\{'
+    message: Unsafe GitHub Actions expression injection detected in command; interpolate via environment variables instead.
+    severity: ERROR
+    languages: [yaml]
+    metadata:
+      cwe: "CWE-78"
+      owasp: "A03:2021-Injection"
+      category: "iac"
+      confidence: "high"

@@ -1,0 +1,85 @@
+{
+  "protocol": "jsonrpc-2.0",
+  "version": "1.0.0-rc1",
+  "fixtures": {
+    "handshake": {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "token": "0123456789abcdef0123456789abcdef",
+        "method": "agent.handshake",
+        "params": {
+          "client": "vscode",
+          "version": "1.0.0"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "status": "authenticated",
+          "serverVersion": "1.0.0-rc1",
+          "protocolVersion": "2.0",
+          "capabilities": [
+            "scan.run",
+            "scan.status",
+            "findings.list",
+            "fix.preview",
+            "fix.apply",
+            "baseline.create",
+            "suppress.add",
+            "threatmodel.run",
+            "sbom.generate",
+            "dast.run",
+            "doctor.run",
+            "agent.coverage"
+          ]
+        }
+      }
+    },
+    "scanRun": {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "token": "0123456789abcdef0123456789abcdef",
+        "method": "scan.run",
+        "params": {
+          "repoPath": "/test/workspace",
+          "paths": ["app.go"],
+          "incremental": true,
+          "offline": true
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "scanId": "scan-1698000000000000000"
+        }
+      }
+    },
+    "findingSample": {
+      "id": "SENTINEL-TEST-001",
+      "source": "semgrep",
+      "engine": "external",
+      "category": "sast",
+      "rule": "rules.injection.sql-injection",
+      "severity": "critical",
+      "cwe": "CWE-89",
+      "cve": "CVE-2023-1234",
+      "cvss": 9.8,
+      "file": "app/server.go",
+      "line_start": 42,
+      "line_end": 45,
+      "message": "Potential SQL injection via string concatenation",
+      "reachable": true,
+      "risk_score": 95,
+      "fix_suggestion": {
+        "kind": "replacement",
+        "description": "Use parameterized queries db.Query(sql, args...)",
+        "diff": "--- a/app/server.go\n+++ b/app/server.go",
+        "confidence": "high"
+      }
+    }
+  }
+}

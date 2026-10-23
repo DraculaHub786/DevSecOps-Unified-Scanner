@@ -2,6 +2,7 @@ package trivy
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -76,7 +77,42 @@ type trivyOutput struct {
 			PkgName  string `json:"PkgName"`
 			Name     string `json:"Name"`
 		} `json:"Licenses"`
+		Secrets []struct {
+			RuleID    string `json:"RuleID"`
+			Category  string `json:"Category"`
+			Severity  string `json:"Severity"`
+			Title     string `json:"Title"`
+			StartLine int    `json:"StartLine"`
+			EndLine   int    `json:"EndLine"`
+			Match     string `json:"Match"`
+		} `json:"Secrets"`
 	} `json:"Results"`
+}
+
+func isVulnDBUnavailable(stderr, stdout string) bool {
+	combined := strings.ToLower(stderr + " " + stdout)
+	dbPatterns := []string{
+		"failed to download vulnerability db",
+		"database download error",
+		"cannot be used without database",
+		"offline-scan cannot be used without database",
+		"failed to download db",
+		"download error",
+		"vulnerability db",
+		"failed to open db",
+		"connection refused",
+		"network is unreachable",
+		"i/o timeout",
+		"no such host",
+		"context deadline exceeded",
+		"client.timeout exceeded",
+	}
+	for _, p := range dbPatterns {
+		if strings.Contains(combined, p) {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *TrivyAdapter) Run(ctx context.Context, repoPath string, cfg *config.Config, discovery *orchestrator.DiscoveryResult) ([]orchestrator.Finding, error) {
@@ -92,25 +128,103 @@ func (a *TrivyAdapter) Run(ctx context.Context, repoPath string, cfg *config.Con
 		return a.runNativeFallback(repoPath, cfg, discovery)
 	}
 
-	return a.runCLI(ctx, binPath, repoPath, cfg)
+	return a.runCLI(ctx, binPath, repoPath, cfg, discovery)
 }
 
-func (a *TrivyAdapter) runCLI(ctx context.Context, binPath, repoPath string, cfg *config.Config) ([]orchestrator.Finding, error) {
-	scanners := []string{"misconfig"}
+func (a *TrivyAdapter) runCLI(ctx context.Context, binPath, repoPath string, cfg *config.Config, discovery *orchestrator.DiscoveryResult) ([]orchestrator.Finding, error) {
+	var (
+		allFindings []orchestrator.Finding
+		hasIaC      bool
+		iacRan      bool
+		partialErr  error
+	)
+
+	// 1. IaC & Secrets Pass (Fully offline-safe, decoupled from vulnerability DB)
+	if cfg.Scanners.IaC.Enabled {
+		iacRan = true
+		args := []string{"fs", "--format", "json", "--scanners", "misconfig,secret", "--skip-db-update", "--skip-check-update"}
+		if cfg.Offline {
+			args = append(args, "--offline-scan")
+		}
+		args = append(args, repoPath)
+
+		toolRes, err := adapters.RunTool(ctx, binPath, args...)
+		if err != nil {
+			return nil, fmt.Errorf("trivy iac execution failed: %w", err)
+		}
+
+		if toolRes.ExitCode >= 2 {
+			errLine := strings.TrimSpace(string(toolRes.Stderr))
+			return nil, fmt.Errorf("trivy iac error (exit %d): %s", toolRes.ExitCode, errLine)
+		}
+
+		findings, err := a.ParseOutput(toolRes.Stdout, repoPath, cfg)
+		if err != nil {
+			return nil, err
+		}
+		if len(findings) > 0 {
+			hasIaC = true
+			allFindings = append(allFindings, findings...)
+		}
+
+		// Check for non-fatal parse errors reported in stderr
+		errStr := strings.ToLower(string(toolRes.Stderr))
+		if strings.Contains(errStr, "failed to parse") || strings.Contains(errStr, "syntax error") {
+			partialErr = fmt.Errorf("%w: %s", orchestrator.ErrPartial, strings.TrimSpace(string(toolRes.Stderr)))
+		}
+	}
+
+	// 2. Vulnerability & License (SCA) Pass (Requires CVE database)
 	if cfg.Scanners.SCA.Enabled {
-		scanners = append(scanners, "vuln", "license")
-	}
-	toolRes, err := adapters.RunTool(ctx, binPath, "fs", "--format", "json", "--scanners", strings.Join(scanners, ","), repoPath)
-	if err != nil {
-		return nil, fmt.Errorf("trivy execution failed: %w", err)
+		if cfg.Offline {
+			// In offline mode, attempt scan with existing cached DB.
+			scaArgs := []string{"fs", "--format", "json", "--scanners", "vuln,license", "--offline-scan", "--skip-db-update", "--skip-check-update", repoPath}
+			scaRes, err := adapters.RunTool(ctx, binPath, scaArgs...)
+			if err != nil || scaRes.ExitCode != 0 {
+				// DB is unavailable or missing in offline mode
+				if !iacRan || (!hasIaC && discovery != nil && len(discovery.IaCFiles) == 0) {
+					return nil, fmt.Errorf("%w: trivy vulnerability database unavailable in --offline mode", orchestrator.ErrSkipped)
+				}
+				fmt.Fprintln(os.Stderr, "trivy: vulnerability database unavailable in --offline mode; skipped vulnerability scanning")
+			} else {
+				scaFindings, _ := a.ParseOutput(scaRes.Stdout, repoPath, cfg)
+				allFindings = append(allFindings, scaFindings...)
+			}
+		} else {
+			// Online mode: run SCA scan
+			scaArgs := []string{"fs", "--format", "json", "--scanners", "vuln,license", "--skip-check-update", repoPath}
+			scaRes, err := adapters.RunTool(ctx, binPath, scaArgs...)
+			if err != nil {
+				if isVulnDBUnavailable(err.Error(), "") {
+					if !iacRan || (!hasIaC && discovery != nil && len(discovery.IaCFiles) == 0) {
+						return nil, fmt.Errorf("%w: trivy vulnerability database unavailable: %v", orchestrator.ErrSkipped, err)
+					}
+					fmt.Fprintf(os.Stderr, "trivy: vulnerability database unavailable (%v); skipped vulnerability scanning\n", err)
+				} else {
+					return nil, fmt.Errorf("trivy sca execution failed: %w", err)
+				}
+			} else if scaRes.ExitCode >= 2 {
+				errLine := strings.TrimSpace(string(scaRes.Stderr))
+				if isVulnDBUnavailable(errLine, string(scaRes.Stdout)) {
+					if !iacRan || (!hasIaC && discovery != nil && len(discovery.IaCFiles) == 0) {
+						return nil, fmt.Errorf("%w: trivy vulnerability database unavailable (%s)", orchestrator.ErrSkipped, errLine)
+					}
+					fmt.Fprintf(os.Stderr, "trivy: vulnerability database download failed: %s; skipped vulnerability scanning\n", errLine)
+				} else {
+					// Actual scanner failure!
+					return nil, fmt.Errorf("trivy sca error (exit %d): %s", scaRes.ExitCode, errLine)
+				}
+			} else {
+				scaFindings, _ := a.ParseOutput(scaRes.Stdout, repoPath, cfg)
+				allFindings = append(allFindings, scaFindings...)
+			}
+		}
 	}
 
-	if toolRes.ExitCode >= 2 {
-		errLine := strings.TrimSpace(string(toolRes.Stderr))
-		return nil, fmt.Errorf("trivy error (exit %d): %s", toolRes.ExitCode, errLine)
+	if partialErr != nil {
+		return allFindings, partialErr
 	}
-
-	return a.ParseOutput(toolRes.Stdout, repoPath, cfg)
+	return allFindings, nil
 }
 
 // ParseOutput parses raw JSON from Trivy and maps to normalized findings.
@@ -245,6 +359,46 @@ func (a *TrivyAdapter) ParseOutput(data []byte, repoPath string, cfg *config.Con
 				findings = append(findings, f)
 			}
 		}
+
+		// Secrets (from Trivy secrets scanner)
+		for _, sec := range res.Secrets {
+			startLine := sec.StartLine
+			if startLine <= 0 {
+				startLine = 1
+			}
+			endLine := sec.EndLine
+			if endLine <= 0 {
+				endLine = startLine
+			}
+			findingID := orchestrator.GenerateID("trivy", sec.RuleID, relFile, startLine)
+			if cfg.ShouldIgnoreFinding(findingID) {
+				continue
+			}
+			snippet := sec.Match
+			if snippet == "" {
+				snippet = sec.Title
+			}
+			f := orchestrator.Finding{
+				ID:          findingID,
+				Source:      "trivy",
+				Engine:      orchestrator.EngineExternal,
+				Category:    orchestrator.CategorySecret,
+				Rule:        sec.RuleID,
+				Severity:    mapTrivySeverity(sec.Severity),
+				CWE:         "CWE-798",
+				File:        relFile,
+				LineStart:   startLine,
+				LineEnd:     endLine,
+				Message:     fmt.Sprintf("Hardcoded secret detected: %s", sec.Title),
+				Snippet:     orchestrator.RedactSecret(snippet),
+				OWASP:       "A07:2021-Identification and Authentication Failures",
+				FirstSeen:   time.Now().UTC(),
+				Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategorySecret, sec.RuleID, relFile, snippet),
+			}
+			f.RiskScore = orchestrator.CalculateRiskScore(&f)
+			f.FixSuggestion = orchestrator.GenerateRemediation(repoPath, &f)
+			findings = append(findings, f)
+		}
 	}
 
 	return findings, nil
@@ -315,6 +469,39 @@ func ScanImage(ctx context.Context, imageName string) ([]orchestrator.Finding, e
 			f.RiskScore = orchestrator.CalculateRiskScore(&f)
 			findings = append(findings, f)
 		}
+
+		for _, vuln := range res.Vulnerabilities {
+			findingID := orchestrator.GenerateID("trivy", vuln.VulnerabilityID, imageName, 1)
+			snippet := fmt.Sprintf("%s@%s", vuln.PkgName, vuln.InstalledVersion)
+			cwe := "CWE-1395"
+			if len(vuln.CweIDs) > 0 {
+				cwe = vuln.CweIDs[0]
+			}
+			msg := vuln.Title
+			if msg == "" {
+				msg = fmt.Sprintf("Vulnerability %s in package %s (fixed in: %s)", vuln.VulnerabilityID, snippet, vuln.FixedVersion)
+			}
+			f := orchestrator.Finding{
+				ID:          findingID,
+				Source:      "trivy",
+				Engine:      orchestrator.EngineExternal,
+				Category:    orchestrator.CategorySCA,
+				Rule:        vuln.VulnerabilityID,
+				Severity:    mapTrivySeverity(vuln.Severity),
+				CVE:         vuln.VulnerabilityID,
+				CWE:         cwe,
+				File:        imageName,
+				LineStart:   1,
+				LineEnd:     1,
+				Message:     fmt.Sprintf("[%s] %s", imageName, msg),
+				Snippet:     snippet,
+				OWASP:       "A06:2021-Vulnerable and Outdated Components",
+				FirstSeen:   time.Now().UTC(),
+				Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategorySCA, vuln.VulnerabilityID, imageName, snippet),
+			}
+			f.RiskScore = orchestrator.CalculateRiskScore(&f)
+			findings = append(findings, f)
+		}
 	}
 
 	return findings, nil
@@ -360,6 +547,8 @@ func (a *TrivyAdapter) runNativeFallback(repoPath string, cfg *config.Config, di
 	var targetFiles []string
 	if discovery != nil && len(discovery.IaCFiles) > 0 {
 		targetFiles = discovery.IaCFiles
+	} else if discovery != nil && len(discovery.IaCFiles) == 0 {
+		return nil, fmt.Errorf("%w: no IaC configuration files found for native fallback", orchestrator.ErrSkipped)
 	} else {
 		_ = filepath.Walk(repoPath, func(path string, info os.FileInfo, err error) error {
 			if err != nil || info.IsDir() {
@@ -372,6 +561,10 @@ func (a *TrivyAdapter) runNativeFallback(repoPath string, cfg *config.Config, di
 			}
 			return nil
 		})
+	}
+
+	if len(targetFiles) == 0 {
+		return nil, fmt.Errorf("%w: no IaC configuration files found", orchestrator.ErrSkipped)
 	}
 
 	for _, rel := range targetFiles {
@@ -389,8 +582,18 @@ func (a *TrivyAdapter) runNativeFallback(repoPath string, cfg *config.Config, di
 		base := strings.ToLower(filepath.Base(rel))
 
 		if strings.Contains(base, "dockerfile") {
-			// Check if runs as root (missing USER nonroot)
-			if !regexp.MustCompile(`(?m)^\s*USER\s+[^\s]+`).MatchString(content) {
+			// Check if runs as root (missing USER instruction or explicitly root/0)
+			userMatch := regexp.MustCompile(`(?m)^\s*USER\s+([^\s]+)`).FindStringSubmatch(content)
+			isRoot := false
+			if len(userMatch) == 0 {
+				isRoot = true
+			} else {
+				userVal := strings.ToLower(strings.TrimSpace(userMatch[1]))
+				if userVal == "root" || userVal == "0" {
+					isRoot = true
+				}
+			}
+			if isRoot {
 				findingID := orchestrator.GenerateID("trivy", "AVD-DS-0002", rel, 1)
 				if !cfg.ShouldIgnoreFinding(findingID) {
 					f := orchestrator.Finding{
@@ -404,7 +607,7 @@ func (a *TrivyAdapter) runNativeFallback(repoPath string, cfg *config.Config, di
 						File:        rel,
 						LineStart:   1,
 						LineEnd:     1,
-						Message:     "Dockerfile does not specify a non-root USER instruction; container will execute as root",
+						Message:     "Dockerfile executes as root (missing non-root USER instruction or explicitly set to root)",
 						Snippet:     "USER root",
 						OWASP:       "A05:2021-Security Misconfiguration",
 						FirstSeen:   time.Now().UTC(),
@@ -416,8 +619,9 @@ func (a *TrivyAdapter) runNativeFallback(repoPath string, cfg *config.Config, di
 				}
 			}
 
-			// Check for latest tag
+			// Check for latest tag and insecure curl | sh pipes
 			lines := strings.Split(content, "\n")
+			curlPipeRegex := regexp.MustCompile(`(?i)(?:curl|wget)\s+[^|;` + "`" + `\n]+\|\s*(?:sh|bash)`)
 			for idx, line := range lines {
 				if match := regexp.MustCompile(`(?i)^\s*FROM\s+([^\s:]+)(?::latest)?\s*$`).FindStringSubmatch(line); len(match) > 0 {
 					if strings.Contains(line, ":latest") || !strings.Contains(match[0], ":") {
@@ -447,20 +651,47 @@ func (a *TrivyAdapter) runNativeFallback(repoPath string, cfg *config.Config, di
 						}
 					}
 				}
+
+				if curlPipeRegex.MatchString(line) {
+					findingID := orchestrator.GenerateID("trivy", "AVD-DS-0003", rel, idx+1)
+					if !cfg.ShouldIgnoreFinding(findingID) {
+						snippet := strings.TrimSpace(line)
+						f := orchestrator.Finding{
+							ID:          findingID,
+							Source:      "trivy",
+							Engine:      orchestrator.EngineEmbedded,
+							Category:    orchestrator.CategoryIaC,
+							Rule:        "AVD-DS-0003",
+							Severity:    orchestrator.SeverityHigh,
+							CWE:         "CWE-494",
+							File:        rel,
+							LineStart:   idx + 1,
+							LineEnd:     idx + 1,
+							Message:     "Insecure download pipe to shell ('curl | sh' or 'wget | bash') in Dockerfile bypasses integrity verification and allows arbitrary code execution",
+							Snippet:     snippet,
+							OWASP:       "A08:2021-Software and Data Integrity Failures",
+							FirstSeen:   time.Now().UTC(),
+							Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategoryIaC, "AVD-DS-0003", rel, snippet),
+						}
+						f.RiskScore = orchestrator.CalculateRiskScore(&f)
+						f.FixSuggestion = orchestrator.GenerateRemediation(repoPath, &f)
+						findings = append(findings, f)
+					}
+				}
 			}
 		}
 
 		if strings.HasSuffix(base, ".tf") {
-			// Check for open ingress 0.0.0.0/0
-			file, err := os.Open(fullPath)
+			contentBytes, err := os.ReadFile(fullPath)
 			if err != nil {
 				continue
 			}
-			scanner := bufio.NewScanner(file)
+			scanner := bufio.NewScanner(bytes.NewReader(contentBytes))
 			lineNum := 0
 			for scanner.Scan() {
 				lineNum++
 				line := scanner.Text()
+				// Open ingress 0.0.0.0/0
 				if strings.Contains(line, `"0.0.0.0/0"`) && (strings.Contains(line, "cidr_blocks") || strings.Contains(line, "cidr")) {
 					findingID := orchestrator.GenerateID("trivy", "AVD-AWS-0107", rel, lineNum)
 					if !cfg.ShouldIgnoreFinding(findingID) {
@@ -487,19 +718,298 @@ func (a *TrivyAdapter) runNativeFallback(repoPath string, cfg *config.Config, di
 						findings = append(findings, f)
 					}
 				}
+
+				// S3 bucket public read ACL
+				if strings.Contains(line, `"public-read"`) && strings.Contains(line, "acl") {
+					findingID := orchestrator.GenerateID("trivy", "AVD-AWS-0086", rel, lineNum)
+					if !cfg.ShouldIgnoreFinding(findingID) {
+						snippet := strings.TrimSpace(line)
+						f := orchestrator.Finding{
+							ID:          findingID,
+							Source:      "trivy",
+							Engine:      orchestrator.EngineEmbedded,
+							Category:    orchestrator.CategoryIaC,
+							Rule:        "AVD-AWS-0086",
+							Severity:    orchestrator.SeverityHigh,
+							CWE:         "CWE-284",
+							File:        rel,
+							LineStart:   lineNum,
+							LineEnd:     lineNum,
+							Message:     "S3 bucket configured with public-read ACL exposing data to the public internet",
+							Snippet:     snippet,
+							OWASP:       "A05:2021-Security Misconfiguration",
+							FirstSeen:   time.Now().UTC(),
+							Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategoryIaC, "AVD-AWS-0086", rel, snippet),
+						}
+						f.RiskScore = orchestrator.CalculateRiskScore(&f)
+						f.FixSuggestion = orchestrator.GenerateRemediation(repoPath, &f)
+						findings = append(findings, f)
+					}
+				}
 			}
-			file.Close()
+		}
+
+		// Docker Compose scanning
+		if strings.Contains(base, "compose") && (strings.HasSuffix(base, ".yml") || strings.HasSuffix(base, ".yaml")) {
+			contentBytes, err := os.ReadFile(fullPath)
+			if err == nil {
+				scanner := bufio.NewScanner(bytes.NewReader(contentBytes))
+				lineNum := 0
+				hasHealthcheck := false
+				for scanner.Scan() {
+					lineNum++
+					line := scanner.Text()
+
+					if strings.Contains(line, "privileged: true") {
+						findingID := orchestrator.GenerateID("trivy", "AVD-DCP-0001", rel, lineNum)
+						if !cfg.ShouldIgnoreFinding(findingID) {
+							snippet := strings.TrimSpace(line)
+							f := orchestrator.Finding{
+								ID:          findingID,
+								Source:      "trivy",
+								Engine:      orchestrator.EngineEmbedded,
+								Category:    orchestrator.CategoryIaC,
+								Rule:        "AVD-DCP-0001",
+								Severity:    orchestrator.SeverityCritical,
+								CWE:         "CWE-250",
+								File:        rel,
+								LineStart:   lineNum,
+								LineEnd:     lineNum,
+								Message:     "Docker Compose service executes in privileged mode, disabling host isolation",
+								Snippet:     snippet,
+								OWASP:       "A05:2021-Security Misconfiguration",
+								FirstSeen:   time.Now().UTC(),
+								Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategoryIaC, "AVD-DCP-0001", rel, snippet),
+							}
+							f.RiskScore = orchestrator.CalculateRiskScore(&f)
+							f.FixSuggestion = orchestrator.GenerateRemediation(repoPath, &f)
+							findings = append(findings, f)
+						}
+					}
+
+					if strings.Contains(line, "0.0.0.0:22:22") || strings.Contains(line, `"22:22"`) {
+						findingID := orchestrator.GenerateID("trivy", "AVD-DCP-0002", rel, lineNum)
+						if !cfg.ShouldIgnoreFinding(findingID) {
+							snippet := strings.TrimSpace(line)
+							f := orchestrator.Finding{
+								ID:          findingID,
+								Source:      "trivy",
+								Engine:      orchestrator.EngineEmbedded,
+								Category:    orchestrator.CategoryIaC,
+								Rule:        "AVD-DCP-0002",
+								Severity:    orchestrator.SeverityHigh,
+								CWE:         "CWE-284",
+								File:        rel,
+								LineStart:   lineNum,
+								LineEnd:     lineNum,
+								Message:     "Docker Compose service exposes SSH port 22 directly to public interface",
+								Snippet:     snippet,
+								OWASP:       "A05:2021-Security Misconfiguration",
+								FirstSeen:   time.Now().UTC(),
+								Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategoryIaC, "AVD-DCP-0002", rel, snippet),
+							}
+							f.RiskScore = orchestrator.CalculateRiskScore(&f)
+							f.FixSuggestion = orchestrator.GenerateRemediation(repoPath, &f)
+							findings = append(findings, f)
+						}
+					}
+
+					if strings.Contains(line, "/var/run/docker.sock") {
+						findingID := orchestrator.GenerateID("trivy", "AVD-DCP-0003", rel, lineNum)
+						if !cfg.ShouldIgnoreFinding(findingID) {
+							snippet := strings.TrimSpace(line)
+							f := orchestrator.Finding{
+								ID:          findingID,
+								Source:      "trivy",
+								Engine:      orchestrator.EngineEmbedded,
+								Category:    orchestrator.CategoryIaC,
+								Rule:        "AVD-DCP-0003",
+								Severity:    orchestrator.SeverityCritical,
+								CWE:         "CWE-250",
+								File:        rel,
+								LineStart:   lineNum,
+								LineEnd:     lineNum,
+								Message:     "Docker daemon socket /var/run/docker.sock mounted into container; enables root container breakout",
+								Snippet:     snippet,
+								OWASP:       "A05:2021-Security Misconfiguration",
+								FirstSeen:   time.Now().UTC(),
+								Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategoryIaC, "AVD-DCP-0003", rel, snippet),
+							}
+							f.RiskScore = orchestrator.CalculateRiskScore(&f)
+							f.FixSuggestion = orchestrator.GenerateRemediation(repoPath, &f)
+							findings = append(findings, f)
+						}
+					}
+
+					if strings.Contains(line, "healthcheck:") {
+						hasHealthcheck = true
+					}
+				}
+
+				if !hasHealthcheck && strings.Contains(string(contentBytes), "services:") {
+					findingID := orchestrator.GenerateID("trivy", "AVD-DCP-0004", rel, 1)
+					if !cfg.ShouldIgnoreFinding(findingID) {
+						f := orchestrator.Finding{
+							ID:          findingID,
+							Source:      "trivy",
+							Engine:      orchestrator.EngineEmbedded,
+							Category:    orchestrator.CategoryIaC,
+							Rule:        "AVD-DCP-0004",
+							Severity:    orchestrator.SeverityMedium,
+							CWE:         "CWE-657",
+							File:        rel,
+							LineStart:   1,
+							LineEnd:     1,
+							Message:     "Docker Compose configuration missing healthcheck specification",
+							Snippet:     "healthcheck: (missing)",
+							OWASP:       "A05:2021-Security Misconfiguration",
+							FirstSeen:   time.Now().UTC(),
+							Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategoryIaC, "AVD-DCP-0004", rel, "missing-healthcheck"),
+						}
+						f.RiskScore = orchestrator.CalculateRiskScore(&f)
+						f.FixSuggestion = orchestrator.GenerateRemediation(repoPath, &f)
+						findings = append(findings, f)
+					}
+				}
+			}
+		}
+
+		// Kubernetes & Helm chart scanning
+		if (strings.HasSuffix(base, ".yaml") || strings.HasSuffix(base, ".yml")) &&
+			(strings.Contains(rel, "k8s") || strings.Contains(rel, "templates") || strings.Contains(content, "apiVersion:")) {
+			contentBytes, err := os.ReadFile(fullPath)
+			if err == nil {
+				scanner := bufio.NewScanner(bytes.NewReader(contentBytes))
+				lineNum := 0
+				hasResources := false
+				for scanner.Scan() {
+					lineNum++
+					line := scanner.Text()
+
+					if strings.Contains(line, "privileged: true") {
+						findingID := orchestrator.GenerateID("trivy", "AVD-KSV-0017", rel, lineNum)
+						if !cfg.ShouldIgnoreFinding(findingID) {
+							snippet := strings.TrimSpace(line)
+							f := orchestrator.Finding{
+								ID:          findingID,
+								Source:      "trivy",
+								Engine:      orchestrator.EngineEmbedded,
+								Category:    orchestrator.CategoryIaC,
+								Rule:        "AVD-KSV-0017",
+								Severity:    orchestrator.SeverityCritical,
+								CWE:         "CWE-250",
+								File:        rel,
+								LineStart:   lineNum,
+								LineEnd:     lineNum,
+								Message:     "Pod container runs in privileged mode, disabling container isolation barriers",
+								Snippet:     snippet,
+								OWASP:       "A05:2021-Security Misconfiguration",
+								FirstSeen:   time.Now().UTC(),
+								Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategoryIaC, "AVD-KSV-0017", rel, snippet),
+							}
+							f.RiskScore = orchestrator.CalculateRiskScore(&f)
+							f.FixSuggestion = orchestrator.GenerateRemediation(repoPath, &f)
+							findings = append(findings, f)
+						}
+					}
+
+					if strings.Contains(line, "CAP_SYS_ADMIN") || strings.Contains(line, `"SYS_ADMIN"`) || strings.Contains(line, "SYS_ADMIN") || (strings.Contains(line, "- ALL") && strings.Contains(content, "add:")) {
+						findingID := orchestrator.GenerateID("trivy", "AVD-KSV-0005", rel, lineNum)
+						if !cfg.ShouldIgnoreFinding(findingID) {
+							snippet := strings.TrimSpace(line)
+							f := orchestrator.Finding{
+								ID:          findingID,
+								Source:      "trivy",
+								Engine:      orchestrator.EngineEmbedded,
+								Category:    orchestrator.CategoryIaC,
+								Rule:        "AVD-KSV-0005",
+								Severity:    orchestrator.SeverityHigh,
+								CWE:         "CWE-250",
+								File:        rel,
+								LineStart:   lineNum,
+								LineEnd:     lineNum,
+								Message:     "Dangerous container capability granted (CAP_SYS_ADMIN or ALL)",
+								Snippet:     snippet,
+								OWASP:       "A05:2021-Security Misconfiguration",
+								FirstSeen:   time.Now().UTC(),
+								Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategoryIaC, "AVD-KSV-0005", rel, snippet),
+							}
+							f.RiskScore = orchestrator.CalculateRiskScore(&f)
+							f.FixSuggestion = orchestrator.GenerateRemediation(repoPath, &f)
+							findings = append(findings, f)
+						}
+					}
+
+					if strings.Contains(line, "readOnlyRootFilesystem: false") {
+						findingID := orchestrator.GenerateID("trivy", "AVD-KSV-0014", rel, lineNum)
+						if !cfg.ShouldIgnoreFinding(findingID) {
+							snippet := strings.TrimSpace(line)
+							f := orchestrator.Finding{
+								ID:          findingID,
+								Source:      "trivy",
+								Engine:      orchestrator.EngineEmbedded,
+								Category:    orchestrator.CategoryIaC,
+								Rule:        "AVD-KSV-0014",
+								Severity:    orchestrator.SeverityMedium,
+								CWE:         "CWE-732",
+								File:        rel,
+								LineStart:   lineNum,
+								LineEnd:     lineNum,
+								Message:     "Container root filesystem is not mounted read-only",
+								Snippet:     snippet,
+								OWASP:       "A05:2021-Security Misconfiguration",
+								FirstSeen:   time.Now().UTC(),
+								Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategoryIaC, "AVD-KSV-0014", rel, snippet),
+							}
+							f.RiskScore = orchestrator.CalculateRiskScore(&f)
+							f.FixSuggestion = orchestrator.GenerateRemediation(repoPath, &f)
+							findings = append(findings, f)
+						}
+					}
+
+					if strings.Contains(line, "resources:") {
+						hasResources = true
+					}
+				}
+
+				if !hasResources && (strings.Contains(string(contentBytes), "containers:") || strings.Contains(string(contentBytes), "kind: Pod") || strings.Contains(string(contentBytes), "kind: Deployment")) {
+					findingID := orchestrator.GenerateID("trivy", "AVD-KSV-0015", rel, 1)
+					if !cfg.ShouldIgnoreFinding(findingID) {
+						f := orchestrator.Finding{
+							ID:          findingID,
+							Source:      "trivy",
+							Engine:      orchestrator.EngineEmbedded,
+							Category:    orchestrator.CategoryIaC,
+							Rule:        "AVD-KSV-0015",
+							Severity:    orchestrator.SeverityMedium,
+							CWE:         "CWE-400",
+							File:        rel,
+							LineStart:   1,
+							LineEnd:     1,
+							Message:     "Container does not specify CPU/memory resource limits",
+							Snippet:     "resources: (missing)",
+							OWASP:       "A05:2021-Security Misconfiguration",
+							FirstSeen:   time.Now().UTC(),
+							Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategoryIaC, "AVD-KSV-0015", rel, "missing-resources"),
+						}
+						f.RiskScore = orchestrator.CalculateRiskScore(&f)
+						f.FixSuggestion = orchestrator.GenerateRemediation(repoPath, &f)
+						findings = append(findings, f)
+					}
+				}
+			}
 		}
 
 		if (strings.HasSuffix(base, ".yml") || strings.HasSuffix(base, ".yaml")) && strings.Contains(rel, ".github/workflows") {
-			file, err := os.Open(fullPath)
+			contentBytes, err := os.ReadFile(fullPath)
 			if err != nil {
 				continue
 			}
-			scanner := bufio.NewScanner(file)
+			scanner := bufio.NewScanner(bytes.NewReader(contentBytes))
 			lineNum := 0
 			actionRefRegex := regexp.MustCompile(`(?i)^\s*(?:-\s*)?uses:\s*([a-zA-Z0-9_\-\/]+)@([^\s]+)`)
 			shaRegex := regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
+			untrustedEventRegex := regexp.MustCompile(`(?i)\$\{\{\s*github\.event\.(?:issue|pull_request|comment|head_commit|review|discussion)\.(?:title|body|message|head\.ref|author_association)`)
 
 			for scanner.Scan() {
 				lineNum++
@@ -593,8 +1103,55 @@ func (a *TrivyAdapter) runNativeFallback(repoPath string, cfg *config.Config, di
 						}
 					}
 				}
+
+				// 4. Unsafe use of untrusted event data inside shell commands (Expression Injection)
+				if untrustedEventRegex.MatchString(line) {
+					trimmed := strings.TrimSpace(line)
+					parts := strings.SplitN(trimmed, ":", 2)
+					isEnvAssign := false
+					if len(parts) == 2 {
+						key := strings.TrimSpace(parts[0])
+						val := strings.TrimSpace(parts[1])
+						isIdentifier := true
+						for _, r := range key {
+							if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-') {
+								isIdentifier = false
+								break
+							}
+						}
+						if isIdentifier && key != "run" && key != "uses" && strings.HasPrefix(val, "${{") {
+							isEnvAssign = true
+						}
+					}
+
+					if !isEnvAssign {
+						findingID := orchestrator.GenerateID("trivy", "AVD-GHA-0004", rel, lineNum)
+						if !cfg.ShouldIgnoreFinding(findingID) {
+							snippet := strings.TrimSpace(line)
+							f := orchestrator.Finding{
+								ID:          findingID,
+								Source:      "trivy",
+								Engine:      orchestrator.EngineEmbedded,
+								Category:    orchestrator.CategoryIaC,
+								Rule:        "AVD-GHA-0004",
+								Severity:    orchestrator.SeverityCritical,
+								CWE:         "CWE-78",
+								File:        rel,
+								LineStart:   lineNum,
+								LineEnd:     lineNum,
+								Message:     "Unsafe GitHub Actions expression injection: untrusted event data is interpolated directly into workflow commands; pass through an intermediate environment variable (env: VAR: ${{ ... }}) instead",
+								Snippet:     snippet,
+								OWASP:       "A03:2021-Injection",
+								FirstSeen:   time.Now().UTC(),
+								Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategoryIaC, "AVD-GHA-0004", rel, snippet),
+							}
+							f.RiskScore = orchestrator.CalculateRiskScore(&f)
+							f.FixSuggestion = orchestrator.GenerateRemediation(repoPath, &f)
+							findings = append(findings, f)
+						}
+					}
+				}
 			}
-			file.Close()
 		}
 	}
 

@@ -80,36 +80,54 @@ func GenerateHTML(result *orchestrator.ScanResult, failOn string) string {
   <header>
     <div>
       <h1>🛡️ Sentinel DevSecOps Report</h1>
-      <div class="meta">Target: <code>` + html.EscapeString(result.Discovery.RepoPath) + `</code> | Duration: ` + fmt.Sprintf("%d ms", result.DurationMs) + ` | Mode: ` + strings.ToUpper(result.Mode) + `</div>
+`)
+
+	repoPathStr := ""
+	if result.Discovery != nil {
+		repoPathStr = result.Discovery.RepoPath
+	}
+	fmt.Fprintf(&sb, `      <div class="meta">Target: <code>%s</code> | Duration: %d ms | Mode: %s</div>
     </div>
     <div>
-      <span class="badge" style="background: ` + statusColor + `; color: white;">` + statusText + ` (Fail-on: ` + html.EscapeString(failOn) + `)</span>
+      <span class="badge" style="background: %s; color: white;">%s (Fail-on: %s)</span>
     </div>
   </header>
 
   <div class="grid">
     <div class="card">
       <div style="color: var(--text-muted); font-size: 13px;">Total Flaws</div>
-      <div class="card-num">` + fmt.Sprintf("%d", result.Summary.Total) + `</div>
+      <div class="card-num">%d</div>
     </div>
     <div class="card">
       <div style="color: var(--crit); font-size: 13px;">Critical</div>
-      <div class="card-num" style="color: var(--crit);">` + fmt.Sprintf("%d", result.Summary.Critical) + `</div>
+      <div class="card-num" style="color: var(--crit);">%d</div>
     </div>
     <div class="card">
       <div style="color: var(--high); font-size: 13px;">High</div>
-      <div class="card-num" style="color: var(--high);">` + fmt.Sprintf("%d", result.Summary.High) + `</div>
+      <div class="card-num" style="color: var(--high);">%d</div>
     </div>
     <div class="card">
       <div style="color: var(--med); font-size: 13px;">Medium</div>
-      <div class="card-num" style="color: var(--med);">` + fmt.Sprintf("%d", result.Summary.Medium) + `</div>
+      <div class="card-num" style="color: var(--med);">%d</div>
     </div>
     <div class="card">
       <div style="color: var(--low); font-size: 13px;">Low</div>
-      <div class="card-num" style="color: var(--low);">` + fmt.Sprintf("%d", result.Summary.Low) + `</div>
+      <div class="card-num" style="color: var(--low);">%d</div>
     </div>
   </div>
-`)
+`,
+		html.EscapeString(repoPathStr),
+		result.DurationMs,
+		strings.ToUpper(result.Mode),
+		statusColor,
+		statusText,
+		html.EscapeString(failOn),
+		result.Summary.Total,
+		result.Summary.Critical,
+		result.Summary.High,
+		result.Summary.Medium,
+		result.Summary.Low,
+	)
 
 	if len(result.Warnings) > 0 {
 		sb.WriteString(`  <div style="background: rgba(234, 179, 8, 0.1); border: 1px solid #eab308; border-radius: 8px; padding: 12px 16px; margin-bottom: 24px;">
@@ -117,7 +135,7 @@ func GenerateHTML(result *orchestrator.ScanResult, failOn string) string {
     <ul style="margin: 0; padding-left: 20px; color: #fef08a; font-size: 13px;">
 `)
 		for _, w := range result.Warnings {
-			sb.WriteString(`      <li>` + html.EscapeString(w) + `</li>` + "\n")
+			fmt.Fprintf(&sb, "      <li>%s</li>\n", html.EscapeString(w))
 		}
 		sb.WriteString(`    </ul>
   </div>

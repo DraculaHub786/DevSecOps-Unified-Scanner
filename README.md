@@ -11,9 +11,13 @@ A unified local-first DevSecOps security scanner orchestrating industry-standard
 ## 🧭 Documentation & Architecture
 
 - 📐 **[Architecture & Build Guide](docs/architecture.md)** — Core pipelines, engine adapters, and design principles.
+- 🛡️ **[Security Rules Catalog](docs/rules.md)** — Complete catalog of all 65 embedded rules across SAST, Supply Chain, and GitHub Actions.
+- ⚙️ **[CI/CD Integration & Exit Codes](docs/ci.md)** — Gating policies, GitHub Actions, and pipeline integration.
+- 🧩 **[VS Code Extension Guide](docs/extension.md)** — IDE setup, settings, diagnostics, and JSON-RPC IPC protocol.
+- 🔒 **[Security Model & STRIDE Analysis](docs/security-model.md)** — Assets, threats, boundaries, and controls.
 - 🧮 **[Contextual Risk Scoring](docs/risk-scoring.md)** — Mathematical formula and weighting models.
-- 🔒 **[Security Policy](SECURITY.md)** — Vulnerability reporting and network safety invariants.
-- 🤝 **[Contributing Guide](CONTRIBUTING.md)** — Development standards and commit conventions.
+- 📜 **[Changelog](CHANGELOG.md)** — Release history and milestone tracker.
+- 🔐 **[Security Policy](SECURITY.md)** — Vulnerability reporting and network safety invariants.
 
 ---
 

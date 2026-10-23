@@ -1,0 +1,18 @@
+name: Safe Workflow
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # Pinned full 40-character SHA
+      - name: Safe Echo
+        env:
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+        run: |
+          echo "Title: $ISSUE_TITLE"

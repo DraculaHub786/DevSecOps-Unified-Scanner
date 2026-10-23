@@ -1,6 +1,7 @@
 package nuclei
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/config"
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/orchestrator"
+	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/testdata/dast"
 )
 
 func TestParseNucleiGolden(t *testing.T) {
@@ -69,5 +71,41 @@ func TestNucleiIsApplicable(t *testing.T) {
 	}
 	if !adapter.IsApplicable(discoveryWithTarget) {
 		t.Errorf("Expected IsApplicable to be true when TargetURL is set")
+	}
+}
+
+func TestNucleiPassiveChecksAgainstVulnerableDASTTarget(t *testing.T) {
+	server := dast.NewVulnerableDASTServer()
+	defer server.Close()
+
+	adapter := NewWithAuth(true)
+	cfg := config.DefaultConfig()
+	cfg.Scanners.DAST.Enabled = true
+	cfg.Scanners.DAST.Target = server.URL
+	cfg.Scanners.DAST.AllowPrivate = true // Localhost testing allowed in test suite
+	cfg.Engine = "embedded"
+
+	findings, err := adapter.runPassiveNativeChecks(context.Background(), server.URL, cfg)
+	if err != nil {
+		t.Fatalf("runPassiveNativeChecks failed: %v", err)
+	}
+
+	foundRules := make(map[string]bool)
+	for _, f := range findings {
+		foundRules[f.Rule] = true
+	}
+
+	expectedRules := []string{
+		"missing-csp-header",
+		"missing-x-frame-options",
+		"missing-x-content-type-options",
+		"cors-wildcard-origin",
+		"sensitive-env-endpoint-exposed",
+	}
+
+	for _, rule := range expectedRules {
+		if !foundRules[rule] {
+			t.Errorf("Expected rule %q to be detected on vulnerable DAST target, got findings: %v", rule, findings)
+		}
 	}
 }

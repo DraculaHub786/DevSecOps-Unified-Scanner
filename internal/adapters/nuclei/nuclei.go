@@ -234,5 +234,116 @@ func (a *NucleiAdapter) runPassiveNativeChecks(ctx context.Context, targetURL st
 		}
 	}
 
+	// 3. Missing X-Frame-Options (Clickjacking defense)
+	if headers.Get("X-Frame-Options") == "" {
+		id := orchestrator.GenerateID("nuclei", "missing-x-frame-options", targetURL, 1)
+		if !cfg.ShouldIgnoreFinding(id) {
+			f := orchestrator.Finding{
+				ID:          id,
+				Source:      "nuclei",
+				Engine:      orchestrator.EngineEmbedded,
+				Category:    orchestrator.CategoryDAST,
+				Rule:        "missing-x-frame-options",
+				Severity:    orchestrator.SeverityMedium,
+				CWE:         "CWE-1021",
+				File:        targetURL,
+				LineStart:   1,
+				LineEnd:     1,
+				Message:     "Missing X-Frame-Options header; endpoint may be susceptible to UI clickjacking [Embedded Lite Check]",
+				Snippet:     "X-Frame-Options: (missing)",
+				OWASP:       "A05:2021-Security Misconfiguration",
+				FirstSeen:   time.Now().UTC(),
+				Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategoryDAST, "missing-x-frame-options", targetURL, "missing-xfo"),
+			}
+			f.RiskScore = orchestrator.CalculateRiskScore(&f)
+			findings = append(findings, f)
+		}
+	}
+
+	// 4. Missing X-Content-Type-Options (MIME-sniffing defense)
+	if !strings.EqualFold(headers.Get("X-Content-Type-Options"), "nosniff") {
+		id := orchestrator.GenerateID("nuclei", "missing-x-content-type-options", targetURL, 1)
+		if !cfg.ShouldIgnoreFinding(id) {
+			f := orchestrator.Finding{
+				ID:          id,
+				Source:      "nuclei",
+				Engine:      orchestrator.EngineEmbedded,
+				Category:    orchestrator.CategoryDAST,
+				Rule:        "missing-x-content-type-options",
+				Severity:    orchestrator.SeverityLow,
+				CWE:         "CWE-16",
+				File:        targetURL,
+				LineStart:   1,
+				LineEnd:     1,
+				Message:     "Missing or invalid X-Content-Type-Options header; MIME-sniffing protection disabled [Embedded Lite Check]",
+				Snippet:     "X-Content-Type-Options: (missing or not nosniff)",
+				OWASP:       "A05:2021-Security Misconfiguration",
+				FirstSeen:   time.Now().UTC(),
+				Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategoryDAST, "missing-x-content-type-options", targetURL, "missing-xcto"),
+			}
+			f.RiskScore = orchestrator.CalculateRiskScore(&f)
+			findings = append(findings, f)
+		}
+	}
+
+	// 5. Wildcard or Arbitrary Origin CORS
+	if cors := headers.Get("Access-Control-Allow-Origin"); cors == "*" || cors == "null" {
+		id := orchestrator.GenerateID("nuclei", "cors-wildcard-origin", targetURL, 1)
+		if !cfg.ShouldIgnoreFinding(id) {
+			f := orchestrator.Finding{
+				ID:          id,
+				Source:      "nuclei",
+				Engine:      orchestrator.EngineEmbedded,
+				Category:    orchestrator.CategoryDAST,
+				Rule:        "cors-wildcard-origin",
+				Severity:    orchestrator.SeverityMedium,
+				CWE:         "CWE-942",
+				File:        targetURL,
+				LineStart:   1,
+				LineEnd:     1,
+				Message:     fmt.Sprintf("Insecure CORS header Access-Control-Allow-Origin: %s allows arbitrary cross-origin requests [Embedded Lite Check]", cors),
+				Snippet:     fmt.Sprintf("Access-Control-Allow-Origin: %s", cors),
+				OWASP:       "A05:2021-Security Misconfiguration",
+				FirstSeen:   time.Now().UTC(),
+				Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategoryDAST, "cors-wildcard-origin", targetURL, cors),
+			}
+			f.RiskScore = orchestrator.CalculateRiskScore(&f)
+			findings = append(findings, f)
+		}
+	}
+
+	// 6. Sensitive exposed endpoint probe (/.env)
+	baseURL := strings.TrimRight(targetURL, "/")
+	envProbeURL := baseURL + "/.env"
+	if envReq, err := http.NewRequestWithContext(ctx, "GET", envProbeURL, nil); err == nil {
+		if envResp, err := client.Do(envReq); err == nil {
+			defer envResp.Body.Close()
+			if envResp.StatusCode == http.StatusOK {
+				id := orchestrator.GenerateID("nuclei", "sensitive-env-endpoint-exposed", envProbeURL, 1)
+				if !cfg.ShouldIgnoreFinding(id) {
+					f := orchestrator.Finding{
+						ID:          id,
+						Source:      "nuclei",
+						Engine:      orchestrator.EngineEmbedded,
+						Category:    orchestrator.CategoryDAST,
+						Rule:        "sensitive-env-endpoint-exposed",
+						Severity:    orchestrator.SeverityCritical,
+						CWE:         "CWE-200",
+						File:        envProbeURL,
+						LineStart:   1,
+						LineEnd:     1,
+						Message:     "Sensitive configuration file /.env is publicly exposed without authentication [Embedded Lite Check]",
+						Snippet:     "GET /.env -> 200 OK",
+						OWASP:       "A01:2021-Broken Access Control",
+						FirstSeen:   time.Now().UTC(),
+						Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategoryDAST, "sensitive-env-endpoint-exposed", envProbeURL, "env-200"),
+					}
+					f.RiskScore = orchestrator.CalculateRiskScore(&f)
+					findings = append(findings, f)
+				}
+			}
+		}
+	}
+
 	return findings, nil
 }

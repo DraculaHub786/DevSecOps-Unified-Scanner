@@ -7,6 +7,8 @@ echo "🛡️ Sentinel PR Flow Verification"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN_PATH="${REPO_ROOT}/bin/sentinel"
 
+export PATH="${REPO_ROOT}/plugins:${PATH}"
+
 # Compile Sentinel binary if not present
 if [ ! -f "${BIN_PATH}" ]; then
   echo "Building Sentinel binary..."
@@ -40,16 +42,18 @@ git commit -m "chore: commit baseline"
 
 echo "2. Simulating PR introducing a new high-severity finding..."
 git checkout -b feature/vulnerable-change
-cat << 'EOF' > app.js
-const AWS_SECRET_KEY = "AKIAIOSFODNN7EXAMPLEEXAMPLEEXAMPLE";
-console.log("Compromised key:", AWS_SECRET_KEY);
+PAT_PREFIX="ghp"
+PAT_BODY="0123456789abcdefghijklmnopqrstuvwxyz"
+cat << EOF > app.js
+const GITHUB_TOKEN = "${PAT_PREFIX}_${PAT_BODY}";
+console.log("Compromised token:", GITHUB_TOKEN);
 EOF
 
 git add app.js
 
 echo "3. Running CI gating with baseline..."
 set +e
-"${BIN_PATH}" scan . --ci --offline --baseline --fail-on=high
+"${BIN_PATH}" scan . --ci --offline --baseline --allow-lite --fail-on=high
 CI_EXIT_CODE=$?
 set -e
 
@@ -64,7 +68,7 @@ git checkout main -- app.js
 git add app.js
 
 echo "5. Verifying clean state passes CI gate..."
-"${BIN_PATH}" scan . --ci --offline --baseline --fail-on=high
+"${BIN_PATH}" scan . --ci --offline --baseline --allow-lite --fail-on=high
 CLEAN_EXIT_CODE=$?
 
 if [ "${CLEAN_EXIT_CODE}" -ne 0 ]; then

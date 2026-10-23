@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/adapters/gitleaks"
+	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/adapters/govulncheck"
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/adapters/osv"
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/adapters/resilience"
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/adapters/semgrep"
@@ -52,6 +53,7 @@ func newThreatModelCmd() *cobra.Command {
 				semgrep.New(),
 				trivy.New(),
 				resilience.New(),
+				govulncheck.New(),
 			)
 
 			fmt.Println("🗺️ Scanning workspace and mapping STRIDE threat model...")

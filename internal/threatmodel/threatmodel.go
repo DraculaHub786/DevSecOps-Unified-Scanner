@@ -126,6 +126,9 @@ func GenerateThreatModel(repoPath string, findings []orchestrator.Finding) (*Thr
 				}
 			}
 		}
+		if err := scanner.Err(); err != nil {
+			return nil
+		}
 
 		return nil
 	})

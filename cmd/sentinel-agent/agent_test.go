@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"encoding/json"
 	"net"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -109,6 +111,22 @@ func TestAgentRPCContract(t *testing.T) {
 		t.Errorf("Expected status 'ok', got: %v", pingResp.Result)
 	}
 
+	// 1b. Test agent.handshake
+	handshakeResp := callRPC("agent.handshake", map[string]interface{}{
+		"client":  "vscode",
+		"version": "1.0.0",
+	})
+	if handshakeResp.Error != nil {
+		t.Errorf("agent.handshake returned error: %v", handshakeResp.Error)
+	}
+	hsMap, ok := handshakeResp.Result.(map[string]interface{})
+	if !ok || hsMap["status"] != "authenticated" {
+		t.Errorf("Expected status 'authenticated', got: %v", handshakeResp.Result)
+	}
+	if hsMap["serverVersion"] != "1.0.0-rc1" {
+		t.Errorf("Expected serverVersion '1.0.0-rc1', got: %v", hsMap["serverVersion"])
+	}
+
 	// 2. Test doctor.run
 	doctorResp := callRPC("doctor.run", nil)
 	if doctorResp.Error != nil {
@@ -137,5 +155,64 @@ func TestAgentRPCContract(t *testing.T) {
 	unknownResp := callRPC("non.existent.method", nil)
 	if unknownResp.Error == nil || unknownResp.Error.Code != -32601 {
 		t.Errorf("Expected code -32601 for unknown method, got: %v", unknownResp.Error)
+	}
+}
+
+func TestSharedIPCFixturesAgainstAgent(t *testing.T) {
+	fixturePath := filepath.Join("..", "..", "testdata", "ipc", "fixtures.json")
+	data, err := os.ReadFile(fixturePath)
+	if err != nil {
+		t.Fatalf("Failed to read shared fixture %s: %v", fixturePath, err)
+	}
+
+	var root struct {
+		Protocol string `json:"protocol"`
+		Version  string `json:"version"`
+		Fixtures struct {
+			Handshake struct {
+				Request  JSONRPCRequest  `json:"request"`
+				Response JSONRPCResponse `json:"response"`
+			} `json:"handshake"`
+			ScanRun struct {
+				Request  JSONRPCRequest  `json:"request"`
+				Response JSONRPCResponse `json:"response"`
+			} `json:"scanRun"`
+		} `json:"fixtures"`
+	}
+
+	if err := json.Unmarshal(data, &root); err != nil {
+		t.Fatalf("Failed to unmarshal shared IPC fixture: %v", err)
+	}
+
+	testToken := root.Fixtures.Handshake.Request.Token
+	srv := newAgentServer(testToken)
+
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	go srv.handleConnection(serverConn)
+	scanner := bufio.NewScanner(clientConn)
+
+	// Send handshake request from fixture
+	reqBytes, _ := json.Marshal(root.Fixtures.Handshake.Request)
+	_, _ = clientConn.Write(append(reqBytes, '\n'))
+
+	if !scanner.Scan() {
+		t.Fatalf("Expected response for shared handshake fixture")
+	}
+
+	var resp JSONRPCResponse
+	if err := json.Unmarshal(scanner.Bytes(), &resp); err != nil {
+		t.Fatalf("Failed to parse response: %v", err)
+	}
+
+	if resp.Error != nil {
+		t.Fatalf("Handshake fixture returned error: %v", resp.Error)
+	}
+
+	resMap, ok := resp.Result.(map[string]interface{})
+	if !ok || resMap["status"] != "authenticated" {
+		t.Errorf("Expected status authenticated, got: %v", resp.Result)
 	}
 }

@@ -150,7 +150,7 @@ func newRulesTestCmd() *cobra.Command {
 			if runSemgrep {
 				if semgrepPath, err := exec.LookPath("semgrep"); err == nil {
 					fmt.Fprintf(cmd.OutOrStdout(), "\n⚡ Executing native Semgrep rule test runner (%s --test rules/)...\n", semgrepPath)
-					cmdExec := exec.Command(semgrepPath, "--test", "rules/")
+					cmdExec := exec.Command("semgrep", "--test", "rules/")
 					cmdExec.Stdout = cmd.OutOrStdout()
 					cmdExec.Stderr = cmd.ErrOrStderr()
 					if err := cmdExec.Run(); err != nil {

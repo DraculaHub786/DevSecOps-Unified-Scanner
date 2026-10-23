@@ -23,9 +23,9 @@ func GenerateMarkdown(result *orchestrator.ScanResult, failOn string) string {
 	sb.WriteString("# 🛡️ Sentinel DevSecOps Scan Summary\n\n")
 
 	if passed {
-		sb.WriteString("> **Status: PASSED ✅** — No security findings exceeded the gating threshold (`" + failOn + "`)\n\n")
+		fmt.Fprintf(&sb, "> **Status: PASSED ✅** — No security findings exceeded the gating threshold (`%s`)\n\n", failOn)
 	} else {
-		sb.WriteString("> **Status: FAILED ❌** — Critical/High findings violate the gating threshold (`" + failOn + "`)\n\n")
+		fmt.Fprintf(&sb, "> **Status: FAILED ❌** — Critical/High findings violate the gating threshold (`%s`)\n\n", failOn)
 	}
 
 	sb.WriteString("### 📊 Scan Metrics\n\n")

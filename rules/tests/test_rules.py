@@ -40,3 +40,10 @@ def test_py(cursor, user_input):
 
     # ruleid: org-python-ssrf-requests
     requests.get(request.args.get("target"))
+
+    # ruleid: org-python-xxe-processing
+    etree.XMLParser(resolve_entities=True)
+
+    # ruleid: org-python-ssti-jinja2
+    render_template_string(user_input)
+
