@@ -70,3 +70,34 @@ func TestCalculateRiskScore_Table(t *testing.T) {
 		})
 	}
 }
+
+func TestReachabilityRiskScoreTiers(t *testing.T) {
+	// Acceptance test for P-13: fixture with one dependency imported and one declared-but-unused -> different risk scores
+	baseFinding := Finding{
+		Severity: SeverityHigh,
+		Category: CategorySCA,
+		CVSS:     7.5,
+		File:     "package.json",
+	}
+
+	unimported := baseFinding
+	unimported.ReachabilityLevel = "unimported"
+
+	imported := baseFinding
+	imported.ReachabilityLevel = "imported"
+
+	proven := baseFinding
+	proven.ReachabilityLevel = "proven"
+
+	scoreUnimported := CalculateRiskScore(&unimported)
+	scoreImported := CalculateRiskScore(&imported)
+	scoreProven := CalculateRiskScore(&proven)
+
+	if scoreImported <= scoreUnimported {
+		t.Errorf("expected imported risk score (%.1f) > unimported risk score (%.1f)", scoreImported, scoreUnimported)
+	}
+	if scoreProven <= scoreImported {
+		t.Errorf("expected proven risk score (%.1f) > imported risk score (%.1f)", scoreProven, scoreImported)
+	}
+}
+

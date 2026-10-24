@@ -5,13 +5,18 @@
 # =========================================================================
 set -euo pipefail
 
-VERSION="${1:-1.0.1}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+if [ -z "${1:-}" ] && [ -f "${ROOT_DIR}/VERSION" ]; then
+    VERSION="$(tr -d '[:space:]' < "${ROOT_DIR}/VERSION")"
+else
+    VERSION="${1:-1.0.2}"
+fi
 COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "none")
 BUILD_DATE=$(date -u +'%Y-%m-%d')
 LDFLAGS="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${BUILD_DATE}"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 DIST_DIR="${ROOT_DIR}/dist"
 
 rm -rf "${DIST_DIR}"

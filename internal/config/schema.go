@@ -2,6 +2,7 @@ package config
 
 // Config represents the top-level configuration loaded from .sentinel.yml.
 type Config struct {
+	ConfigDir  string          `yaml:"-"`
 	Version    int             `yaml:"version"`
 	Engine     string          `yaml:"engine"` // auto | external | embedded
 	Offline    bool            `yaml:"offline,omitempty"`
@@ -27,6 +28,7 @@ type SASTConfig struct {
 	Enabled    bool     `yaml:"enabled"`
 	Ruleset    string   `yaml:"ruleset"`
 	ExtraRules []string `yaml:"extra_rules"`
+	Packs      []string `yaml:"packs"`
 }
 
 // SecretsConfig options for Gitleaks.

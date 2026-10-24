@@ -10,11 +10,17 @@ import (
 
 func newDoctorCmd() *cobra.Command {
 	var jsonOutput bool
+	var privacyOutput bool
 
 	cmd := &cobra.Command{
 		Use:   "doctor",
-		Short: "Inspect scanner engine availability, versions, and full vs lite mode",
+		Short: "Inspect scanner engine availability, versions, full vs lite mode, and privacy disclosure",
 		Run: func(cmd *cobra.Command, args []string) {
+			if privacyOutput {
+				doctor.PrintPrivacy()
+				return
+			}
+
 			statuses := doctor.CheckEngines()
 
 			if jsonOutput {
@@ -61,5 +67,6 @@ func newDoctorCmd() *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output diagnostics in JSON format")
+	cmd.Flags().BoolVar(&privacyOutput, "privacy", false, "Audit and print all external network endpoints contacted and why")
 	return cmd
 }

@@ -9,6 +9,13 @@ function testJS(req, res, db, input) {
   // ruleid: org-js-sql-injection-concat
   db.query("SELECT * FROM users WHERE id = " + input);
 
+  // ruleid: org-js-sql-injection-concat
+  const query = "SELECT * FROM users WHERE id = '" + req.params.id + "'";
+  db.query(query);
+
+  // ok: org-js-sql-injection-concat
+  db.query("SELECT * FROM users WHERE id = ?", [req.params.id]);
+
   // ruleid: org-js-command-injection-exec
   child_process.exec(input);
 

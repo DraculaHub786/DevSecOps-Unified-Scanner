@@ -9,9 +9,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BINARY="${ROOT_DIR}/bin/sentinel"
 
+TARGET_VERSION="$(tr -d '[:space:]' < "${ROOT_DIR}/VERSION")"
+
 echo "================================================================="
 echo "🛡️  SENTINEL AUTOMATED ACCEPTANCE SUITE (AT-01 to AT-34)"
-echo "Target Version: 1.0.1 | Date: $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+echo "Target Version: ${TARGET_VERSION} | Date: $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 echo "================================================================="
 
 PASSED=0
@@ -34,14 +36,14 @@ run_check() {
 # Ensure binary is built
 if [ ! -f "${BINARY}" ]; then
   mkdir -p "${ROOT_DIR}/bin"
-  go build -trimpath -ldflags="-s -w -X main.version=1.0.1" -o "${BINARY}" "${ROOT_DIR}/cmd/sentinel"
+  go build -trimpath -ldflags="-s -w -X main.version=${TARGET_VERSION}" -o "${BINARY}" "${ROOT_DIR}/cmd/sentinel"
 fi
 
 # AT-01
 check_at01() {
-  "${BINARY}" version | grep -q "v1\.0\.1"
+  "${BINARY}" version | grep -q "v${TARGET_VERSION}"
 }
-run_check "AT-01" "Sentinel CLI version reports 1.0.1" check_at01
+run_check "AT-01" "Sentinel CLI version reports ${TARGET_VERSION}" check_at01
 
 # AT-02
 check_at02() {
@@ -133,9 +135,9 @@ run_check "AT-15" "Tool checksum verification (plugins/checksums.txt)" check_at1
 
 # AT-16
 check_at16() {
-  grep -q "v1\.0\.1" "${ROOT_DIR}/Formula/sentinel.rb" && \
-  grep -q "1\.0\.1" "${ROOT_DIR}/Dockerfile" && \
-  grep -q "v1\.0\.1" "${ROOT_DIR}/deploy/github-actions/sentinel-scan/action.yml"
+  grep -q "v${TARGET_VERSION}" "${ROOT_DIR}/Formula/sentinel.rb" && \
+  grep -q "${TARGET_VERSION}" "${ROOT_DIR}/Dockerfile" && \
+  grep -q "v${TARGET_VERSION}" "${ROOT_DIR}/deploy/github-actions/sentinel-scan/action.yml"
 }
 run_check "AT-16" "Version stamping consistency across CLI, docs, Docker" check_at16
 
@@ -172,7 +174,7 @@ run_check "AT-20" "Technical documentation suite (rules, ci, extension, security
 check_at21() {
   "${BINARY}" rules test | grep -q "PASS"
 }
-run_check "AT-21" "Embedded 65 rules test suite (sentinel rules test)" check_at21
+run_check "AT-21" "Embedded 78 rules test suite (sentinel rules test)" check_at21
 
 # AT-22
 check_at22() {

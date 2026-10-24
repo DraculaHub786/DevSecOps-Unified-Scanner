@@ -1,0 +1,156 @@
+[
+  {
+    "rule": "github-pat",
+    "file": "app.py",
+    "line": 7,
+    "category": "secret",
+    "severity": "critical"
+  },
+  {
+    "rule": "sast-command-injection",
+    "file": "app.py",
+    "line": 11,
+    "category": "sast",
+    "severity": "critical"
+  },
+  {
+    "rule": "github-pat",
+    "file": "server.js",
+    "line": 6,
+    "category": "secret",
+    "severity": "critical"
+  },
+  {
+    "rule": "aws-access-key-id",
+    "file": "server.js",
+    "line": 7,
+    "category": "secret",
+    "severity": "critical"
+  },
+  {
+    "rule": "aws-secret-access-key",
+    "file": "server.js",
+    "line": 8,
+    "category": "secret",
+    "severity": "critical"
+  },
+  {
+    "rule": "slack-token",
+    "file": "server.js",
+    "line": 9,
+    "category": "secret",
+    "severity": "critical"
+  },
+  {
+    "rule": "slack-webhook",
+    "file": "server.js",
+    "line": 10,
+    "category": "secret",
+    "severity": "critical"
+  },
+  {
+    "rule": "sast-command-injection",
+    "file": "server.js",
+    "line": 15,
+    "category": "sast",
+    "severity": "critical"
+  },
+  {
+    "rule": "AVD-DS-0002",
+    "file": "Dockerfile",
+    "line": 1,
+    "category": "iac",
+    "severity": "high"
+  },
+  {
+    "rule": "sast-tls-skip-verify",
+    "file": "app.py",
+    "line": 15,
+    "category": "sast",
+    "severity": "high"
+  },
+  {
+    "rule": "AVD-AWS-0107",
+    "file": "infra.tf",
+    "line": 9,
+    "category": "iac",
+    "severity": "high"
+  },
+  {
+    "rule": "resilience-unbounded-body-read",
+    "file": "main.go",
+    "line": 11,
+    "category": "resilience",
+    "severity": "high"
+  },
+  {
+    "rule": "sast-tls-skip-verify",
+    "file": "main.go",
+    "line": 18,
+    "category": "sast",
+    "severity": "high"
+  },
+  {
+    "rule": "CVE-2021-23337",
+    "file": "package.json",
+    "line": 9,
+    "category": "sca",
+    "severity": "high"
+  },
+  {
+    "rule": "CVE-2024-37891",
+    "file": "requirements.txt",
+    "line": 2,
+    "category": "sca",
+    "severity": "high"
+  },
+  {
+    "rule": "sast-sql-injection-concat",
+    "file": "server.js",
+    "line": 22,
+    "category": "sast",
+    "severity": "high"
+  },
+  {
+    "rule": "AVD-DS-0001",
+    "file": "Dockerfile",
+    "line": 1,
+    "category": "iac",
+    "severity": "medium"
+  },
+  {
+    "rule": "resilience-missing-server-timeout",
+    "file": "main.go",
+    "line": 24,
+    "category": "resilience",
+    "severity": "medium"
+  },
+  {
+    "rule": "CVE-2020-28168",
+    "file": "package.json",
+    "line": 7,
+    "category": "sca",
+    "severity": "medium"
+  },
+  {
+    "rule": "CVE-2024-29041",
+    "file": "package.json",
+    "line": 8,
+    "category": "sca",
+    "severity": "medium"
+  },
+  {
+    "rule": "CVE-2023-32681",
+    "file": "requirements.txt",
+    "line": 1,
+    "category": "sca",
+    "severity": "medium"
+  },
+  {
+    "rule": "missing-rate-limiter",
+    "file": "server",
+    "line": 1,
+    "category": "resilience",
+    "severity": "medium"
+  }
+]

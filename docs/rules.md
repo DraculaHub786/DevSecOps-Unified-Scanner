@@ -10,11 +10,39 @@ Every rule includes full security metadata: **CWE**, **OWASP 2021 Category**, **
 
 | Category | Rules Count | Supported Languages / Targets |
 |---|---|---|
-| **SAST (Application Security)** | 53 | Go, JavaScript / TypeScript, Python, Java |
+| **SAST (Application Security)** | 68 | Go, JavaScript / TypeScript, Python, Java, PHP, C#, Ruby |
 | **CI/CD & GitHub Actions** | 4 | `.github/workflows/*.{yml,yaml}` |
 | **Software Supply Chain** | 4 | Dockerfile, package.json |
-| **API Resilience & DoS** | 4 | Go, JavaScript, Python, Java |
-| **Total Rules** | **65** | All 65 verified via `sentinel rules test` |
+| **API Resilience & DoS** | 2 | Go, JavaScript, Python |
+| **Total Rules** | **78** | All 78 verified via `sentinel rules test` |
+
+### Supported Language Coverage Matrix
+
+Every supported language ships with built-in coverage for the core OWASP Top 10 vulnerability classes:
+
+| Language | SQLi | Command Injection | Deserialization | Weak Crypto | Secrets | Path Traversal | SSRF | XSS |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| **Go** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **JavaScript / TypeScript** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Python** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Java** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **PHP** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **C# (.NET)** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Ruby** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+
+### Additional Registry Rule Packs
+
+Users can opt into additional vendor and community Semgrep rule packs in `.sentinel.yml`:
+
+```yaml
+scanners:
+  sast:
+    enabled: true
+    packs:
+      - p/php
+      - p/csharp
+      - p/ruby
+```
 
 ---
 
@@ -102,7 +130,8 @@ Every rule includes full security metadata: **CWE**, **OWASP 2021 Category**, **
 * **`org-python-weak-crypto-md5-sha1`** (WARNING / CWE-328): Calling `hashlib.md5()` or `hashlib.sha1()`.
 * **`org-js-weak-crypto-md5-sha1`** (WARNING / CWE-328): Creating MD5 or SHA1 hashes with `crypto.createHash()`.
 * **`org-go-weak-des-cipher`** (ERROR / CWE-327): Using insecure legacy DES cipher `des.NewCipher`. Use AES-GCM or ChaCha20-Poly1305.
-* **`org-jwt-none-algorithm`** (ERROR / CWE-327): Explicitly permitting `"none"` algorithm in JWT token verification.
+* **`org-jwt-none-algorithm`** (ERROR / CWE-327): Explicitly permitting `"none"` algorithm in JWT verification (Go, JavaScript, TypeScript, Java).
+* **`org-jwt-none-algorithm-python`** (ERROR / CWE-327): Insecure JWT decode configuration `algorithms=["none"]` disabling cryptographic signature verification (Python).
 * **`org-go-insecure-skip-verify`** (ERROR / CWE-295): Disabling TLS certificate validation (`InsecureSkipVerify: true`) in Go.
 * **`org-python-requests-verify-false`** (ERROR / CWE-295): Disabling SSL verification (`verify=False`) in Python requests.
 * **`org-js-reject-unauthorized-false`** (ERROR / CWE-295): Setting `rejectUnauthorized: false` in Node.js TLS agents.

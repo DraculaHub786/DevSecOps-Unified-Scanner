@@ -25,14 +25,14 @@ Base severity provides the anchor score:
 If a **CVSS** score ($0.0 \le \text{CVSS} \le 10.0$) is available from OSV or Semgrep metadata:
 $$\text{BaseScore} = (\text{BaseScore} \times 0.6) + \left(\frac{\text{CVSS}}{10.0} \times 40.0\right)$$
 
-### 2. Reachability Multiplier (Heuristic)
+### 2. Reachability Multiplier (P-13)
 
-> [!NOTE]
-> Reachability analysis in v1.0 operates as an AST/token reference **heuristic**. It checks whether the imported module or package identifier is actually invoked or referenced in application source files.
+Sentinel evaluates dependency reachability with honest, transparent tiers rather than binary assumptions:
 
-- **Reachable** (`true`): $\times 1.35$ (active code path imports and references the vulnerable dependency)
-- **Unreachable** (`false`): $\times 0.65$ (dormant, unused transitive dependency)
-- **Unknown** (`nil`): $\times 1.00$
+- **`proven`** ($\times 1.35$): Call-graph level execution path verified to invoke vulnerable symbols (e.g., via `govulncheck` trace).
+- **`imported`** ($\times 1.25$): Actively imported by non-test application source code (`.js`, `.ts`, `.py`, `.go`, `.java`). Test fixtures (`*_test.go`, `test_*.py`, `.spec.ts`) are excluded to avoid false inflation.
+- **`unimported`** ($\times 0.65$): Declared in `package.json`, `requirements.txt`, or lockfiles, but never imported in application code. Automatically deprioritized.
+- **Unspecified / Default** ($\times 1.00$): Used when language reachability analysis is not applicable.
 
 ### 3. Exposure Multiplier
 

@@ -14,6 +14,13 @@ import (
 // LoadFile reads and validates an explicit configuration file by path.
 func LoadFile(filePath string) (*Config, error) {
 	cfg := DefaultConfig()
+	absPath, err := filepath.Abs(filePath)
+	if err == nil {
+		cfg.ConfigDir = filepath.Dir(absPath)
+	} else {
+		cfg.ConfigDir = filepath.Dir(filePath)
+	}
+
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read configuration file %s: %w", filePath, err)
@@ -48,7 +55,13 @@ func Load(repoPath string) (*Config, error) {
 		}
 	}
 
-	return DefaultConfig(), nil
+	def := DefaultConfig()
+	if abs, err := filepath.Abs(repoPath); err == nil {
+		def.ConfigDir = abs
+	} else {
+		def.ConfigDir = repoPath
+	}
+	return def, nil
 }
 
 func validateConfig(cfg *Config) error {

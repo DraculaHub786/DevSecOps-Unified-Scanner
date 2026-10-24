@@ -37,8 +37,12 @@ rules:
 
   - id: org-gha-untrusted-event-injection
     patterns:
-      - pattern-regex: '(?i)\$\{\{\s*github\.event\.(?:issue|pull_request|comment|head_commit|review|discussion)\.(?:title|body|message|head\.ref|author_association)'
-      - pattern-not-regex: '(?i)^\s*(?!(?:run|uses|with)\b)[a-zA-Z0-9_-]+:\s*\$\{\{'
+      - pattern-either:
+          - pattern-inside: |
+              run: $...CMD
+          - pattern: |
+              run: $...CMD
+      - pattern-regex: '(?i)\$\{\{\s*(?:github\.event\.(?:issue|pull_request|comment|head_commit|review|discussion)\.(?:title|body|message|head\.ref|author_association)|github\.head_ref)'
     message: Unsafe GitHub Actions expression injection detected in command; interpolate via environment variables instead.
     severity: ERROR
     languages: [yaml]

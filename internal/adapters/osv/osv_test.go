@@ -40,7 +40,7 @@ func TestParseOSVGolden(t *testing.T) {
 	if f.File != "package-lock.json" {
 		t.Errorf("Expected package-lock.json, got %s", f.File)
 	}
-	if !strings.Contains(f.Message, "[Reachability: heuristic]") {
+	if !strings.Contains(f.Message, "[Reachability: imported]") {
 		t.Errorf("Expected message to carry reachability label, got %s", f.Message)
 	}
 }
@@ -185,19 +185,27 @@ func TestNoLockfileSkipped(t *testing.T) {
 	}
 }
 
-func TestOSVOfflineSkip(t *testing.T) {
+func TestOSVOfflineDegrade(t *testing.T) {
 	adapter := New()
 	cfg := config.DefaultConfig()
 	cfg.Offline = true
 
-	_, err := adapter.runCLI(context.Background(), "mock-osv-path", t.TempDir(), cfg, &orchestrator.DiscoveryResult{})
-	if err == nil {
-		t.Fatal("Expected runCLI to return ErrSkipped in offline mode")
+	tmpDir := t.TempDir()
+	pkgJSON := `{
+  "dependencies": {
+    "lodash": "4.17.15"
+  }
+}`
+	if err := os.WriteFile(filepath.Join(tmpDir, "package.json"), []byte(pkgJSON), 0644); err != nil {
+		t.Fatalf("Failed to write mock package.json: %v", err)
 	}
-	if !errors.Is(err, orchestrator.ErrSkipped) {
-		t.Errorf("Expected error to wrap orchestrator.ErrSkipped, got: %v", err)
+	discovery := &orchestrator.DiscoveryResult{Manifests: []string{"package.json"}}
+
+	findings, err := adapter.Run(context.Background(), tmpDir, cfg, discovery)
+	if !errors.Is(err, orchestrator.ErrDegraded) {
+		t.Fatalf("Expected Run to return ErrDegraded in offline mode, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "needs the OSV advisory database in --offline mode") {
-		t.Errorf("Expected offline message, got: %v", err)
+	if len(findings) == 0 {
+		t.Fatal("Expected findings from embedded advisory list in degraded mode")
 	}
 }

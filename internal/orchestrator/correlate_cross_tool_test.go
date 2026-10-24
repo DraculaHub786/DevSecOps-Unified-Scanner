@@ -168,3 +168,78 @@ func TestCorrelateGovulncheckReachabilityPrecedence(t *testing.T) {
 		t.Errorf("expected message to show proven reachability, got: %s", res.Message)
 	}
 }
+
+func TestCorrelateCanonicalDockerTaxonomy(t *testing.T) {
+	// Acceptance test for P-14: Trivy AVD-DS-0001 vs Semgrep org-supplychain-docker-latest-tag on Dockerfile:1
+	trivyDocker := Finding{
+		ID:          "SENT-c339-trivy",
+		Source:      "trivy",
+		Engine:      EngineExternal,
+		Category:    CategoryIaC,
+		Rule:        "AVD-DS-0001",
+		Severity:    SeverityMedium,
+		CVSS:        5.0,
+		File:        "Dockerfile",
+		LineStart:   1,
+		LineEnd:     1,
+		Message:     "Specify a tag when specifying the base image",
+		Snippet:     "FROM node:latest",
+		Fingerprint: "fp-trivy-docker-latest",
+	}
+
+	semgrepDocker := Finding{
+		ID:          "SENT-7cf3-semgrep",
+		Source:      "semgrep",
+		Engine:      EngineExternal,
+		Category:    CategoryIaC,
+		Rule:        "org-supplychain-docker-latest-tag",
+		Severity:    SeverityHigh,
+		CVSS:        6.5,
+		File:        "Dockerfile",
+		LineStart:   1,
+		LineEnd:     1,
+		Message:     "Base image uses unpinned :latest tag; pin to a specific digest or semver",
+		Snippet:     "FROM node:latest",
+		Fingerprint: "fp-semgrep-docker-latest",
+		FixSuggestion: &Fix{
+			Kind:        FixKindConfigPatch,
+			Description: "Pin container base image to specific digest or immutable tag",
+			Confidence:  "high",
+			Diff:        "- FROM node:latest\n+ FROM node:20.11.0-alpine",
+		},
+	}
+
+	merged := CorrelateAndDeduplicate([]Finding{trivyDocker, semgrepDocker})
+	if len(merged) != 1 {
+		t.Fatalf("expected exactly 1 deduplicated container misconfiguration, got %d", len(merged))
+	}
+
+	res := merged[0]
+	// Verify highest severity kept
+	if res.Severity != SeverityHigh {
+		t.Errorf("expected severity High, got %s", res.Severity)
+	}
+	// Verify highest CVSS kept
+	if res.CVSS != 6.5 {
+		t.Errorf("expected CVSS 6.5, got %f", res.CVSS)
+	}
+	// Verify both sources present in Sources slice
+	hasTrivy := false
+	hasSemgrep := false
+	for _, s := range res.Sources {
+		if s == "trivy" {
+			hasTrivy = true
+		}
+		if s == "semgrep" {
+			hasSemgrep = true
+		}
+	}
+	if !hasTrivy || !hasSemgrep {
+		t.Errorf("expected Sources to contain 'trivy' and 'semgrep', got %v", res.Sources)
+	}
+	// Verify richer fix suggestion was kept
+	if res.FixSuggestion == nil || res.FixSuggestion.Diff == "" {
+		t.Errorf("expected richer fix suggestion with diff to be preserved")
+	}
+}
+

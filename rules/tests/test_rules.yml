@@ -14,6 +14,14 @@ jobs:
     steps:
       # ruleid: org-gha-unpinned-action
       - uses: actions/checkout@v4
+
+      - name: Safe Echo via Environment Variable
+        env:
+          # ok: org-gha-untrusted-event-injection
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+        run: |
+          echo "Safe title: $ISSUE_TITLE"
+
       - name: Command Injection
         run: |
           # ruleid: org-gha-untrusted-event-injection

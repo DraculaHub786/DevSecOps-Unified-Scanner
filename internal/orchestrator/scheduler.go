@@ -19,6 +19,9 @@ var ErrPartial = errors.New("partial scan results")
 // ErrSkipped indicates that a scanner could not run because required prerequisites were absent (e.g. no lockfile).
 var ErrSkipped = errors.New("scanner skipped")
 
+// ErrDegraded indicates that a scanner gracefully degraded to an offline or embedded advisory database due to network unreachability.
+var ErrDegraded = errors.New("scanner degraded")
+
 // ScannerRunner is the interface the scheduler needs to execute adapters.
 type ScannerRunner interface {
 	Name() string
@@ -195,6 +198,19 @@ func (s *Scheduler) Execute(ctx context.Context, cfg *config.Config, opts ScanOp
 					allFindings = append(allFindings, res...)
 					return
 				}
+				if errors.Is(err, ErrDegraded) {
+					msg := fmt.Sprintf("Adapter %s degraded: %v", ad.Name(), err)
+					warnings = append(warnings, msg)
+					coverageMap[ad.Category()] = CoverageLine{
+						Category: ad.Category(),
+						Engine:   EngineEmbedded,
+						Status:   "degraded",
+						Detail:   "network unreachable (used embedded advisory list)",
+					}
+					enginesUsed[ad.Name()] = EngineEmbedded
+					allFindings = append(allFindings, res...)
+					return
+				}
 				msg := fmt.Sprintf("Adapter %s failed: %v", ad.Name(), err)
 				warnings = append(warnings, msg)
 				adapterErrs = append(adapterErrs, msg)
@@ -209,12 +225,17 @@ func (s *Scheduler) Execute(ctx context.Context, cfg *config.Config, opts ScanOp
 
 			// Record engine provenance
 			engine := EngineExternal
-			if cfg.Engine == "embedded" {
+			if ad.Name() == "resilience" {
+				engine = EngineNative
+			} else if cfg.Engine == "embedded" {
 				engine = EngineEmbedded
 			} else if len(res) > 0 {
 				for _, f := range res {
 					if f.Engine == EngineEmbedded {
 						engine = EngineEmbedded
+						break
+					} else if f.Engine == EngineNative {
+						engine = EngineNative
 						break
 					}
 				}
@@ -258,8 +279,9 @@ func (s *Scheduler) Execute(ctx context.Context, cfg *config.Config, opts ScanOp
 
 	// Determine overall mode
 	overallMode := "full"
-	for _, eng := range enginesUsed {
-		if eng == EngineEmbedded {
+	for engName, eng := range enginesUsed {
+		// Native first-party engines (like resilience) do not trigger fallback lite mode
+		if eng == EngineEmbedded && engName != "resilience" {
 			overallMode = "lite"
 			break
 		}

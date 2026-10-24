@@ -159,7 +159,7 @@ func (a *ResilienceAdapter) Run(ctx context.Context, repoPath string, cfg *confi
 					f := orchestrator.Finding{
 						ID:          findingID,
 						Source:      "resilience",
-						Engine:      orchestrator.EngineEmbedded,
+						Engine:      orchestrator.EngineNative,
 						Category:    orchestrator.CategoryResilience,
 						Rule:        r.ID,
 						Severity:    r.Severity,
@@ -194,7 +194,7 @@ func (a *ResilienceAdapter) Run(ctx context.Context, repoPath string, cfg *confi
 			f := orchestrator.Finding{
 				ID:          id,
 				Source:      "resilience",
-				Engine:      orchestrator.EngineEmbedded,
+				Engine:      orchestrator.EngineNative,
 				Category:    orchestrator.CategoryResilience,
 				Rule:        "missing-rate-limiter",
 				Severity:    orchestrator.SeverityMedium,

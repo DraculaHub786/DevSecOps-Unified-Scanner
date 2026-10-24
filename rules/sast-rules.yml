@@ -83,12 +83,28 @@ rules:
       confidence: "high"
 
   - id: org-go-sql-injection-concat
-    patterns:
-      - pattern-either:
-          - pattern: $DB.Query("..." + $INPUT, ...)
-          - pattern: $DB.Exec("..." + $INPUT, ...)
-          - pattern: $DB.QueryRow("..." + $INPUT, ...)
-    message: SQL query constructed via string concatenation. Use parameterized placeholders to prevent SQL injection.
+    mode: taint
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern: fmt.Sprintf(...)
+              - pattern: '"..." + $X'
+              - pattern: r.URL.Query()
+              - pattern: r.FormValue(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $DB.Query($QUERY, ...)
+              - pattern: $DB.QueryRow($QUERY, ...)
+              - pattern: $DB.Exec($QUERY, ...)
+              - pattern: $TX.Query($QUERY, ...)
+              - pattern: $TX.Exec($QUERY, ...)
+    pattern-sanitizers:
+      - patterns:
+          - pattern-either:
+              - pattern: strconv.Atoi(...)
+              - pattern: strconv.ParseInt(...)
+    message: SQL query constructed via string concatenation or Sprintf. Use parameterized placeholders ($1, ?) to prevent SQL injection.
     severity: ERROR
     languages: [go]
     metadata:
@@ -98,12 +114,39 @@ rules:
       confidence: "high"
 
   - id: org-js-sql-injection-concat
-    patterns:
-      - pattern-either:
-          - pattern: $DB.query("..." + $INPUT, ...)
-          - pattern: $DB.execute("..." + $INPUT, ...)
-          - pattern: $DB.query(`...${$INPUT}...`, ...)
-    message: Database query constructed via string concatenation or template literal. Use prepared statements or parameterized queries.
+    mode: taint
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern: req.params
+              - pattern: req.query
+              - pattern: req.body
+              - pattern: req.headers
+              - pattern: $REQ.params
+              - pattern: $REQ.query
+              - pattern: $REQ.body
+              - pattern: $REQ.headers
+              - pattern: $REQ.params.$PROP
+              - pattern: $REQ.query.$PROP
+              - pattern: '"..." + $X'
+              - pattern: '`...${$X}...`'
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $DB.query($QUERY, ...)
+              - pattern: $DB.execute($QUERY, ...)
+              - pattern: connection.query($QUERY, ...)
+              - pattern: pool.query($QUERY, ...)
+              - pattern: knex.raw($QUERY, ...)
+              - pattern: sequelize.query($QUERY, ...)
+    pattern-sanitizers:
+      - patterns:
+          - pattern-either:
+              - pattern: mysql.escape(...)
+              - pattern: $DB.escape(...)
+              - pattern: parseInt(...)
+              - pattern: Number(...)
+    message: Database query constructed via untrusted input or string concatenation. Use prepared statements or parameterized queries.
     severity: ERROR
     languages: [javascript, typescript]
     metadata:
@@ -113,13 +156,30 @@ rules:
       confidence: "high"
 
   - id: org-python-sql-injection-format
-    patterns:
-      - pattern-either:
-          - pattern: $CURSOR.execute(f"...")
-          - pattern: $CURSOR.execute("..." % ...)
-          - pattern: $CURSOR.execute("...".format(...))
-          - pattern: $CURSOR.execute("..." + $INPUT)
-    message: SQL query formatted dynamically with string interpolation or concatenation. Pass parameters as a separate tuple to execute().
+    mode: taint
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern: request.args
+              - pattern: request.form
+              - pattern: request.values
+              - pattern: request.json
+              - pattern: 'f"..."'
+              - pattern: '"..." % ...'
+              - pattern: '"...".format(...)'
+              - pattern: '"..." + $X'
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $CURSOR.execute($QUERY, ...)
+              - pattern: cursor.execute($QUERY, ...)
+              - pattern: db.session.execute($QUERY, ...)
+    pattern-sanitizers:
+      - patterns:
+          - pattern-either:
+              - pattern: int(...)
+              - pattern: float(...)
+    message: SQL query constructed dynamically with string interpolation or concatenation. Pass parameters as a separate tuple to execute().
     severity: ERROR
     languages: [python]
     metadata:
@@ -795,11 +855,21 @@ rules:
       - pattern-either:
           - pattern: jwt.SigningMethodNone
           - pattern: 'algorithm: "none"'
-          - pattern: 'algorithms=["none"]'
           - pattern: Algorithm.none()
     message: Insecure JWT configuration allowing 'none' algorithm disables cryptographic signature verification.
     severity: ERROR
-    languages: [go, javascript, typescript, python, java]
+    languages: [go, javascript, typescript, java]
+    metadata:
+      cwe: "CWE-327"
+      owasp: "A02:2021-Cryptographic Failures"
+      category: "sast"
+      confidence: "high"
+
+  - id: org-jwt-none-algorithm-python
+    pattern: 'algorithms=["none"]'
+    message: Insecure JWT configuration allowing 'none' algorithm disables cryptographic signature verification.
+    severity: ERROR
+    languages: [python]
     metadata:
       cwe: "CWE-327"
       owasp: "A02:2021-Cryptographic Failures"
@@ -847,4 +917,171 @@ rules:
       owasp: "A03:2021-Injection"
       category: "sast"
       confidence: "high"
+
+  - id: org-php-sql-injection
+    patterns:
+      - pattern-either:
+          - pattern: $CONN->query("..." . $INPUT)
+          - pattern: mysqli_query($CONN, "..." . $INPUT)
+          - pattern: $PDO->query("..." . $INPUT)
+    message: Dynamic SQL query constructed via string concatenation in PHP. Use PDO prepared statements with execute().
+    severity: ERROR
+    languages: [php]
+    metadata:
+      cwe: "CWE-89"
+      owasp: "A03:2021-Injection"
+      category: "sast"
+      confidence: "high"
+
+  - id: org-php-command-injection
+    patterns:
+      - pattern-either:
+          - pattern: exec($INPUT)
+          - pattern: system($INPUT)
+          - pattern: passthru($INPUT)
+          - pattern: shell_exec($INPUT)
+    message: Unsanitized input passed directly to PHP system shell command. Use escapeshellarg() or avoid shell execution.
+    severity: ERROR
+    languages: [php]
+    metadata:
+      cwe: "CWE-78"
+      owasp: "A03:2021-Injection"
+      category: "sast"
+      confidence: "high"
+
+  - id: org-php-unsafe-deserialization
+    patterns:
+      - pattern: unserialize($INPUT)
+    message: Calling unserialize() on untrusted user input allows PHP Object Injection and remote code execution.
+    severity: ERROR
+    languages: [php]
+    metadata:
+      cwe: "CWE-502"
+      owasp: "A08:2021-Software and Data Integrity Failures"
+      category: "sast"
+      confidence: "high"
+
+  - id: org-php-weak-crypto-md5
+    patterns:
+      - pattern-either:
+          - pattern: md5(...)
+          - pattern: sha1(...)
+    message: Use of broken cryptographic hash (MD5/SHA1). Use password_hash() with BCRYPT or Argon2 for credentials.
+    severity: WARNING
+    languages: [php]
+    metadata:
+      cwe: "CWE-327"
+      owasp: "A02:2021-Cryptographic Failures"
+      category: "sast"
+      confidence: "high"
+
+  - id: org-csharp-sql-injection
+    patterns:
+      - pattern-either:
+          - pattern: new SqlCommand("..." + $INPUT, ...)
+          - pattern: $CMD.CommandText = "..." + $INPUT
+    message: Dynamic SQL execution via string concatenation in C#. Use parameterized SqlCommand with Parameters.AddWithValue().
+    severity: ERROR
+    languages: [csharp]
+    metadata:
+      cwe: "CWE-89"
+      owasp: "A03:2021-Injection"
+      category: "sast"
+      confidence: "high"
+
+  - id: org-csharp-command-injection
+    patterns:
+      - pattern: Process.Start($INPUT, ...)
+    message: Unsanitized command passed directly to Process.Start in C#. Avoid launching shell processes with untrusted input.
+    severity: ERROR
+    languages: [csharp]
+    metadata:
+      cwe: "CWE-78"
+      owasp: "A03:2021-Injection"
+      category: "sast"
+      confidence: "high"
+
+  - id: org-csharp-unsafe-deserialization
+    patterns:
+      - pattern-either:
+          - pattern: $BF.Deserialize(...)
+          - pattern: new BinaryFormatter().Deserialize(...)
+    message: BinaryFormatter is fundamentally insecure for deserializing untrusted data. Use System.Text.Json or XmlSerializer.
+    severity: ERROR
+    languages: [csharp]
+    metadata:
+      cwe: "CWE-502"
+      owasp: "A08:2021-Software and Data Integrity Failures"
+      category: "sast"
+      confidence: "high"
+
+  - id: org-csharp-weak-crypto-md5
+    patterns:
+      - pattern-either:
+          - pattern: MD5.Create()
+          - pattern: SHA1.Create()
+          - pattern: new MD5CryptoServiceProvider()
+    message: Use of weak cryptographic algorithm MD5/SHA1 in C#. Use SHA256.Create() or HMACSHA256 instead.
+    severity: WARNING
+    languages: [csharp]
+    metadata:
+      cwe: "CWE-327"
+      owasp: "A02:2021-Cryptographic Failures"
+      category: "sast"
+      confidence: "high"
+
+  - id: org-ruby-sql-injection
+    patterns:
+      - pattern-either:
+          - pattern: ActiveRecord::Base.connection.execute("..." + $INPUT)
+          - pattern: $CONN.execute("..." + $INPUT)
+    message: Dynamic SQL execution via string concatenation in Ruby. Use parameterized query placeholders to prevent SQL injection.
+    severity: ERROR
+    languages: [ruby]
+    metadata:
+      cwe: "CWE-89"
+      owasp: "A03:2021-Injection"
+      category: "sast"
+      confidence: "high"
+
+  - id: org-ruby-command-injection
+    patterns:
+      - pattern-either:
+          - pattern: system("..." + $INPUT)
+          - pattern: exec($INPUT)
+    message: Unsanitized command execution in Ruby via system/exec. Use array arguments system(cmd, arg1, arg2) to avoid shell interpolation.
+    severity: ERROR
+    languages: [ruby]
+    metadata:
+      cwe: "CWE-78"
+      owasp: "A03:2021-Injection"
+      category: "sast"
+      confidence: "high"
+
+  - id: org-ruby-unsafe-deserialization
+    patterns:
+      - pattern: Marshal.load($INPUT)
+    message: Marshal.load on untrusted user data can lead to remote code execution. Use JSON.parse for serialization.
+    severity: ERROR
+    languages: [ruby]
+    metadata:
+      cwe: "CWE-502"
+      owasp: "A08:2021-Software and Data Integrity Failures"
+      category: "sast"
+      confidence: "high"
+
+  - id: org-ruby-weak-crypto-md5
+    patterns:
+      - pattern-either:
+          - pattern: Digest::MD5.hexdigest(...)
+          - pattern: Digest::SHA1.hexdigest(...)
+    message: Use of broken cryptographic hash (MD5/SHA1) in Ruby. Use Digest::SHA256 or BCrypt for credentials.
+    severity: WARNING
+    languages: [ruby]
+    metadata:
+      cwe: "CWE-327"
+      owasp: "A02:2021-Cryptographic Failures"
+      category: "sast"
+      confidence: "high"
+
 

@@ -3,8 +3,17 @@
 # Builds binaries for Linux, macOS, and Windows (amd64 + arm64) & generates checksums
 # =========================================================================
 param(
-    [string]$Version = "1.0.1"
+    [string]$Version = ""
 )
+
+if (-not $Version) {
+    $versionFile = Join-Path $PSScriptRoot "../VERSION"
+    if (Test-Path $versionFile) {
+        $Version = (Get-Content $versionFile -Raw).Trim()
+    } else {
+        $Version = "1.0.2"
+    }
+}
 
 $ErrorActionPreference = "Stop"
 

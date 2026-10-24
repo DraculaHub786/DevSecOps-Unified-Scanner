@@ -48,28 +48,66 @@ func RenderTerminal(w io.Writer, result *orchestrator.ScanResult, failOn string)
 	fmt.Fprintf(w, "%s%s   🛡️  SENTINEL DEVSECOPS UNIFIED SCANNER  🛡️%s\n", colorBold, colorGreen, colorReset)
 	fmt.Fprintf(w, "%s%s=========================================================================%s\n\n", colorBold, colorCyan, colorReset)
 
-	// Mode description
-	var extList, embList []string
-	for adName, eng := range result.Engines {
-		if eng == orchestrator.EngineExternal {
-			extList = append(extList, adName)
+	// Provenance line (P-16)
+	var provItems []string
+	catNameMap := map[string]string{
+		"sast":       "SAST",
+		"sca":        "SCA",
+		"secrets":    "Secrets",
+		"iac":        "IaC",
+		"dast":       "DAST",
+		"resilience": "Resilience",
+	}
+	engineToolMap := map[string]string{
+		"sast":       "semgrep",
+		"sca":        "osv-scanner",
+		"secrets":    "gitleaks",
+		"iac":        "trivy",
+		"dast":       "nuclei",
+		"resilience": "native",
+	}
+	for _, c := range result.Coverage {
+		if c.Status == "not-applicable" || c.Status == "skipped" {
+			continue
+		}
+		label := catNameMap[c.Category]
+		if label == "" {
+			label = strings.ToUpper(c.Category)
+		}
+		tool := engineToolMap[c.Category]
+		if tool == "" {
+			tool = c.Category
+		}
+		if c.Engine == orchestrator.EngineNative {
+			provItems = append(provItems, fmt.Sprintf("%s: native", label))
+		} else if c.Status == "degraded" {
+			provItems = append(provItems, fmt.Sprintf("%s: %s (degraded)", label, tool))
+		} else if c.Engine == orchestrator.EngineExternal {
+			provItems = append(provItems, fmt.Sprintf("%s: %s (external)", label, tool))
 		} else {
-			embList = append(embList, adName)
+			provItems = append(provItems, fmt.Sprintf("%s: %s (embedded)", label, tool))
 		}
 	}
 
-	modeStr := fmt.Sprintf("%sMode:%s %s%s%s", colorDim, colorReset, colorGreen, strings.ToUpper(result.Mode), colorReset)
+	modeStr := fmt.Sprintf("%sMode:%s %sFULL%s", colorDim, colorReset, colorGreen, colorReset)
 	if result.Mode == "lite" {
-		modeStr = fmt.Sprintf("%sMode:%s %sLITE%s (embedded lite engines: %s)", colorDim, colorReset, colorYellow, colorReset, strings.Join(embList, ", "))
-	} else if len(extList) > 0 {
-		modeStr = fmt.Sprintf("%sMode:%s %sFULL%s (%d external engines: %s)", colorDim, colorReset, colorGreen, colorReset, len(extList), strings.Join(extList, ", "))
+		modeStr = fmt.Sprintf("%sMode:%s %sLITE%s (fallback engines in use)", colorDim, colorReset, colorYellow, colorReset)
+	}
+
+	repoPath := "."
+	if result.Discovery != nil && result.Discovery.RepoPath != "" {
+		repoPath = result.Discovery.RepoPath
 	}
 
 	fmt.Fprintf(w, "%sTarget:%s %s  %sDuration:%s %dms  %s\n",
-		colorDim, colorReset, result.Discovery.RepoPath,
+		colorDim, colorReset, repoPath,
 		colorDim, colorReset, result.DurationMs,
 		modeStr,
 	)
+	if len(provItems) > 0 {
+		fmt.Fprintf(w, "%sProvenance:%s %s\n", colorDim, colorReset, strings.Join(provItems, " · "))
+	}
+	fmt.Fprintln(w)
 
 	fmt.Fprintf(w, "Summary: %s%d Critical%s | %s%d High%s | %s%d Medium%s | %s%d Low%s | %d Info\n\n",
 		colorBrightRed, result.Summary.Critical, colorReset,
@@ -93,6 +131,8 @@ func RenderTerminal(w io.Writer, result *orchestrator.ScanResult, failOn string)
 			statusColor := colorGreen
 			switch c.Status {
 			case "skipped":
+				statusColor = colorYellow
+			case "degraded":
 				statusColor = colorYellow
 			case "failed":
 				statusColor = colorRed
@@ -129,28 +169,31 @@ func RenderTerminal(w io.Writer, result *orchestrator.ScanResult, failOn string)
 		case orchestrator.SeverityLow:
 			sevColor = colorCyan
 		}
-
-		location := fmt.Sprintf("%s:%d", f.File, f.LineStart)
-		if len(location) > 28 {
-			location = "..." + location[len(location)-25:]
+		locStr := fmt.Sprintf("%s:%d", f.File, f.LineStart)
+		locRunes := []rune(locStr)
+		if len(locRunes) > 28 {
+			locStr = "..." + string(locRunes[len(locRunes)-25:])
 		}
 
 		msg := f.Message
-		if len(msg) > 55 {
-			msg = msg[:52] + "..."
+		msgRunes := []rune(msg)
+		if len(msgRunes) > 55 {
+			msg = string(msgRunes[:52]) + "..."
 		}
 
 		engLabel := "ext"
 		if f.Engine == orchestrator.EngineEmbedded {
 			engLabel = "lite"
+		} else if f.Engine == orchestrator.EngineNative {
+			engLabel = "native"
 		}
 
 		fmt.Fprintf(tw, "%s%s%s\t%s\t%s\t%s\t%s\t%.1f\t%s\n",
-			sevColor, strings.ToUpper(f.Severity[:4]), colorReset,
+			sevColor, sevLabel(f.Severity), colorReset,
 			f.ID,
 			f.Category,
 			engLabel,
-			location,
+			locStr,
 			f.RiskScore,
 			msg,
 		)
@@ -175,3 +218,27 @@ func RenderTerminal(w io.Writer, result *orchestrator.ScanResult, failOn string)
 		fmt.Fprintf(w, "%s%s✅ Gating check passed (below %s threshold)%s\n", colorBold, colorGreen, failOn, colorReset)
 	}
 }
+
+func sevLabel(s string) string {
+	switch strings.ToLower(s) {
+	case orchestrator.SeverityCritical:
+		return "CRIT"
+	case orchestrator.SeverityHigh:
+		return "HIGH"
+	case orchestrator.SeverityMedium:
+		return "MED"
+	case orchestrator.SeverityLow:
+		return "LOW"
+	default:
+		return "INFO"
+	}
+}
+
+func truncateRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n])
+}
+

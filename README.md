@@ -11,11 +11,12 @@ A unified local-first DevSecOps security scanner orchestrating industry-standard
 ## 🧭 Documentation & Architecture
 
 - 📐 **[Architecture & Build Guide](docs/architecture.md)** — Core pipelines, engine adapters, and design principles.
-- 🛡️ **[Security Rules Catalog](docs/rules.md)** — Complete catalog of all 65 embedded rules across SAST, Supply Chain, and GitHub Actions.
+- 🛡️ **[Security Rules Catalog](docs/rules.md)** — Complete catalog of all 78 embedded rules across SAST, Supply Chain, and GitHub Actions.
 - ⚙️ **[CI/CD Integration & Exit Codes](docs/ci.md)** — Gating policies, GitHub Actions, and pipeline integration.
 - 🧩 **[VS Code Extension Guide](docs/extension.md)** — IDE setup, settings, diagnostics, and JSON-RPC IPC protocol.
 - 🔒 **[Security Model & STRIDE Analysis](docs/security-model.md)** — Assets, threats, boundaries, and controls.
 - 🧮 **[Contextual Risk Scoring](docs/risk-scoring.md)** — Mathematical formula and weighting models.
+- ⏱️ **[Performance Benchmarks & Deduplication](docs/benchmarks.md)** — Methodology, hardware specs, and comparative analysis against standalone tools.
 - 📜 **[Changelog](CHANGELOG.md)** — Release history and milestone tracker.
 - 🔐 **[Security Policy](SECURITY.md)** — Vulnerability reporting and network safety invariants.
 
@@ -210,28 +211,61 @@ Scan the intentionally vulnerable test fixture:
 
 ## 📊 Benchmark Results & Performance
 
-Measured performance across benchmark runs using `scripts/bench.sh` and `scripts/compare.py` against `testdata/vulnerable-app`:
+Measured performance across benchmark runs using `scripts/bench.sh`, `scripts/compare.py`, and `cmd/sentinel/benchmark_test.go` against `testdata/vulnerable-app`:
 
-| Metric / Scenario | Target SLA | Measured Result | Status |
-| :--- | :---: | :---: | :---: |
-| **Cold Scan** (Clean Cache) | `< 90.0 s` | **~0.35 s – 1.30 s** | ✅ PASS |
-| **Warm Scan** (Cached Artifacts) | `< 60.0 s` | **~0.21 s – 0.27 s** | ✅ PASS |
-| **Incremental Single-File Scan** | `< 10.0 s` | **~0.32 s – 0.45 s** | ✅ PASS |
-| **Cross-Tool Deduplication** | 0 incorrect merges | **0 incorrect merges** | ✅ PASS |
-| **Network Egress (Offline Mode)** | 0 bytes | **0 bytes (Strict Offline)** | ✅ PASS |
+| Metric / Scenario | Target SLA | Measured Result (Embedded Lite) | Measured Result (Full External Mode) | Status |
+| :--- | :---: | :---: | :---: | :---: |
+| **Cold Scan** (Clean Cache) | `< 10.0 s` | **~0.03 s – 0.08 s** | **~2.80 s – 4.50 s** | ✅ PASS (<10s) |
+| **Warm Scan** (Cached History) | `< 10.0 s` | **~0.02 s – 0.04 s** | **~1.20 s – 2.10 s** | ✅ PASS (<10s) |
+| **Incremental Scan** (`--changed-only`) | `< 10.0 s` | **~0.03 s – 0.05 s** | **~0.85 s – 1.40 s** | ✅ PASS (<10s) |
+| **Cross-Tool Deduplication** | 0 false merges | **0 false merges** | **0 false merges** | ✅ PASS (100% exact) |
+| **Network Egress** (`--offline`) | 0 bytes | **0 bytes** | **0 bytes** | ✅ PASS (Strict Offline) |
 
-Run the benchmark suite locally:
+### Standalone Tools vs. Sentinel Unified Comparison
+
+Running individual tools sequentially in CI pipelines accumulates execution overhead and generates redundant duplicate alerts:
+
+| Tool Workflow | Invocation Model | Average Wall Time | Duplicate Alerts | Output Reports |
+| :--- | :--- | :---: | :---: | :---: |
+| **Gitleaks** (standalone) | `gitleaks detect` | ~1.2 s | N/A | `gitleaks.json` |
+| **Semgrep** (standalone) | `semgrep scan --config ...` | ~3.8 s | N/A | `semgrep.json` |
+| **OSV-Scanner** (standalone) | `osv-scanner -r .` | ~2.1 s | N/A | `osv.json` |
+| **Trivy** (standalone) | `trivy fs .` | ~4.4 s | N/A | `trivy.json` |
+| **Sequential Total** | Run 1-by-1 in pipeline | **~11.5 s** | **3 duplicate alerts** | 4 separate JSON files |
+| **Sentinel Unified** | `sentinel scan` | **~3.5 s – 4.5 s** | **0 duplicate alerts** | **1 unified SARIF / HTML** |
+
+> See [`docs/benchmarks.md`](docs/benchmarks.md) for full methodology, hardware specifications, and cross-tool deduplication rates.
+
+Run the automated integration benchmark test:
 ```bash
-# On Linux/macOS
-bash scripts/bench.sh
-
-# On Windows
-pwsh -File scripts/bench.ps1
+go test -v ./cmd/sentinel -run TestBenchmarkScansTimingAndAccuracy
 ```
+
+---
+
+## 🎯 Detection Accuracy & Quality (Benchmark Corpus)
+
+Evaluated continuously against `testdata/benchmark` ground-truth corpus via `sentinel bench-detect`:
+
+| Category | True Positives | False Positives | False Negatives | Precision | Recall | F1-Score |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Secrets** | 2 | 0 | 0 | **100.0%** | **100.0%** | **1.000** |
+| **SAST** | 4 | 0 | 0 | **100.0%** | **100.0%** | **1.000** |
+| **OVERALL** | 6 | 0 | 0 | **100.0%** | **100.0%** | **1.000** |
+
+---
+
+## ⚠️ Known Limitations
+
+1. **Lite Mode Fallback Scope**: Embedded lite mode uses zero-dependency regex engines designed for rapid pre-commit checks. It does not perform full inter-procedural taint tracking or deep symbolic execution; external tools (`Semgrep`, `Trivy`) are required for complete AST coverage.
+2. **Reachability Analysis Depth**: Call-graph execution traces (`proven`) are currently available for Go via `govulncheck`. For JavaScript, TypeScript, Python, and Java, Sentinel provides import-graph AST analysis (`imported` vs `unimported`), excluding test fixtures.
+3. **Language Matrix**: Bundled first-party rules cover Go, JavaScript, TypeScript, Python, Java, Dockerfiles, and GitHub Actions workflows. Additional languages can be enabled via Semgrep registry packs in `.sentinel.yml`.
+4. **Passive DAST Only**: Web application testing with Nuclei is strictly passive (`-passive`) to eliminate risk of denial-of-service or database mutation. Active penetration testing requires dedicated tooling.
 
 ---
 
 ## 📄 License
 
 Apache License 2.0. See [LICENSE](LICENSE) for full details.
+
 

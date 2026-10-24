@@ -1,6 +1,7 @@
 package rules
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -183,3 +184,55 @@ func TestRuleIDsCoveredInTests(t *testing.T) {
 		}
 	}
 }
+
+func TestRuleCountsMatchFiles(t *testing.T) {
+	stats, err := CountRules()
+	if err != nil {
+		t.Fatalf("CountRules failed: %v", err)
+	}
+
+	countIDsInFile := func(filename string) int {
+		data, err := Content.ReadFile(filename)
+		if err != nil {
+			t.Fatalf("Failed to read %s: %v", filename, err)
+		}
+		lines := strings.Split(string(data), "\n")
+		count := 0
+		for _, l := range lines {
+			trimmed := strings.TrimRight(l, "\r\n")
+			if strings.HasPrefix(trimmed, "  - id:") {
+				count++
+			}
+		}
+		return count
+	}
+
+	sastCount := countIDsInFile("sast-rules.yml")
+	resilienceCount := countIDsInFile("resilience-rules.yml")
+	ghaCount := countIDsInFile("github-actions-rules.yml")
+	scCount := countIDsInFile("supply-chain-rules.yml")
+	expectedTotal := sastCount + resilienceCount + ghaCount + scCount
+
+	if stats.SAST != sastCount {
+		t.Errorf("SAST count mismatch: got %d, want %d", stats.SAST, sastCount)
+	}
+	if stats.Resilience != resilienceCount {
+		t.Errorf("Resilience count mismatch: got %d, want %d", stats.Resilience, resilienceCount)
+	}
+	if stats.GitHubActions != ghaCount {
+		t.Errorf("GitHubActions count mismatch: got %d, want %d", stats.GitHubActions, ghaCount)
+	}
+	if stats.SupplyChain != scCount {
+		t.Errorf("SupplyChain count mismatch: got %d, want %d", stats.SupplyChain, scCount)
+	}
+	if stats.Total != expectedTotal {
+		t.Errorf("Total count mismatch: got %d, want %d", stats.Total, expectedTotal)
+	}
+
+	summary := stats.Summary()
+	t.Logf("Computed summary: %s", summary)
+	if !strings.Contains(summary, fmt.Sprintf("%d rules", expectedTotal)) {
+		t.Errorf("Summary does not contain total count: %s", summary)
+	}
+}
+

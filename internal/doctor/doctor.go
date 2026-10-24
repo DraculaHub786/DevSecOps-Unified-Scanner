@@ -202,3 +202,30 @@ func PrintDoctor(tools []ToolStatus) {
 	}
 	fmt.Println()
 }
+
+// PrintPrivacy outputs all external network endpoints the tool can contact and why (Phase 7 / P-23).
+func PrintPrivacy() {
+	fmt.Println("\n🔒 Sentinel Privacy & Network Disclosure Audit:")
+	fmt.Println("=========================================================================")
+	fmt.Println("Sentinel is built strictly local-first. Zero telemetry is collected by default.")
+	fmt.Println("Zero source code, credentials, or file paths ever leave your local machine.")
+	fmt.Println("=========================================================================")
+	fmt.Println("Network endpoints contacted during scan operations (when online):")
+	fmt.Println("  1. api.osv.dev:443")
+	fmt.Println("     • Purpose: Query Open Source Vulnerabilities database for package CVEs.")
+	fmt.Println("     • Data sent: Package name and version strings only.")
+	fmt.Println("     • Data NOT sent: No source code, secrets, or file paths.")
+	fmt.Println("  2. ghcr.io:443 / aquasecurity.github.io:443")
+	fmt.Println("     • Purpose: Download/update public Trivy vulnerability database cache.")
+	fmt.Println("     • Data sent: HTTPS GET for public database tarball.")
+	fmt.Println("  3. Target URL (provided via --target)")
+	fmt.Println("     • Purpose: Passive DAST scanning with Nuclei.")
+	fmt.Println("     • Authorization: Requires explicit --i-have-authorization flag.")
+	fmt.Println("     • Guardrails: Blocks private RFC1918 IPs, loopback, and cloud metadata.")
+	fmt.Println("-------------------------------------------------------------------------")
+	fmt.Println("Strict Offline Guarantee:")
+	fmt.Println("  Running with '--offline' ensures ZERO outbound network egress.")
+	fmt.Println("  All dependency and rule checks degrade gracefully to local embedded data.")
+	fmt.Println("=========================================================================")
+}
+

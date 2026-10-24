@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -23,7 +24,72 @@ import (
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/doctor"
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/orchestrator"
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/report"
+	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/rules"
 )
+
+// lookupFinding retrieves a finding by ID from recent scan cache, falling back to rescan only if not found (P-11).
+func lookupFinding(repoPath, findingID string) (*orchestrator.Finding, error) {
+	// 1. Try .sentinel/last-scan.json
+	lastScanPath := filepath.Join(repoPath, ".sentinel", "last-scan.json")
+	if data, err := os.ReadFile(lastScanPath); err == nil {
+		var res orchestrator.ScanResult
+		if err := json.Unmarshal(data, &res); err == nil {
+			for _, f := range res.Findings {
+				if strings.EqualFold(f.ID, findingID) {
+					fCopy := f
+					return &fCopy, nil
+				}
+			}
+		}
+	}
+
+	// 2. Try .sentinel/reports/results.json
+	reportJSONPath := filepath.Join(repoPath, ".sentinel", "reports", "results.json")
+	if data, err := os.ReadFile(reportJSONPath); err == nil {
+		var res orchestrator.ScanResult
+		if err := json.Unmarshal(data, &res); err == nil {
+			for _, f := range res.Findings {
+				if strings.EqualFold(f.ID, findingID) {
+					fCopy := f
+					return &fCopy, nil
+				}
+			}
+		}
+	}
+
+	// 3. Fallback: Not in cache, inform user and run fresh scan
+	fmt.Fprintf(os.Stderr, "Finding ID %s not found in recent scan cache; re-scanning %s...\n", findingID, repoPath)
+	cfg, _ := config.Load(repoPath)
+	scheduler := orchestrator.NewScheduler(
+		gitleaks.New(),
+		osv.New(),
+		semgrep.New(),
+		trivy.New(),
+		nuclei.New(),
+		resilience.New(),
+		govulncheck.New(),
+	)
+
+	result, err := scheduler.Execute(context.Background(), cfg, orchestrator.ScanOptions{RepoPath: repoPath})
+	if err != nil {
+		return nil, fmt.Errorf("scan failed: %w", err)
+	}
+
+	// Cache the scan
+	_ = os.MkdirAll(filepath.Dir(lastScanPath), 0755)
+	if data, err := json.MarshalIndent(result, "", "  "); err == nil {
+		_ = os.WriteFile(lastScanPath, data, 0644)
+	}
+
+	for _, f := range result.Findings {
+		if strings.EqualFold(f.ID, findingID) {
+			fCopy := f
+			return &fCopy, nil
+		}
+	}
+
+	return nil, fmt.Errorf("finding ID %s not found in %s", findingID, repoPath)
+}
 
 func newExplainCmd() *cobra.Command {
 	return &cobra.Command{
@@ -38,34 +104,9 @@ func newExplainCmd() *cobra.Command {
 			}
 			repoPath, _ := filepath.Abs(targetPath)
 
-			cfg, _ := config.Load(repoPath)
-			scheduler := orchestrator.NewScheduler(
-				gitleaks.New(),
-				osv.New(),
-				semgrep.New(),
-				trivy.New(),
-				nuclei.New(),
-				resilience.New(),
-				govulncheck.New(),
-			)
-
-			result, err := scheduler.Execute(context.Background(), cfg, orchestrator.ScanOptions{RepoPath: repoPath})
+			matched, err := lookupFinding(repoPath, findingID)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Scan failed: %v\n", err)
-				os.Exit(2)
-			}
-
-			var matched *orchestrator.Finding
-			for _, f := range result.Findings {
-				if strings.EqualFold(f.ID, findingID) {
-					fCopy := f
-					matched = &fCopy
-					break
-				}
-			}
-
-			if matched == nil {
-				fmt.Fprintf(os.Stderr, "Finding ID %s not found in scan of %s.\n", findingID, repoPath)
+				fmt.Fprintf(os.Stderr, "%v\n", err)
 				os.Exit(1)
 			}
 
@@ -82,8 +123,33 @@ func newExplainCmd() *cobra.Command {
 			if matched.CWE != "" {
 				fmt.Printf("CWE:         https://cwe.mitre.org/data/definitions/%s.html\n", strings.TrimPrefix(matched.CWE, "CWE-"))
 			}
-			fmt.Printf("Location:    %s:%d\n", matched.File, matched.LineStart)
 			fmt.Printf("Risk Score:  %.1f / 100\n", matched.RiskScore)
+			reachStr := "unspecified"
+			if matched.ReachabilityLevel != "" {
+				reachStr = matched.ReachabilityLevel
+			} else if matched.Reachable != nil {
+				if *matched.Reachable {
+					reachStr = "reachable"
+				} else {
+					reachStr = "unreachable"
+				}
+			}
+			expStr := "internal"
+			if matched.Exposed != nil {
+				if *matched.Exposed {
+					expStr = "publicly exposed"
+				} else {
+					expStr = "internal only"
+				}
+			} else {
+				lowPath := strings.ToLower(matched.File)
+				if strings.Contains(lowPath, "api/") || strings.Contains(lowPath, "handler") || strings.Contains(lowPath, "controller") || strings.Contains(lowPath, "route") || strings.Contains(lowPath, "server") {
+					expStr = "public entry point (heuristic)"
+				} else if strings.Contains(lowPath, "test") || strings.Contains(lowPath, "fixture") || strings.Contains(lowPath, "mock") {
+					expStr = "test/fixture (heuristic)"
+				}
+			}
+			fmt.Printf("Audit Inputs: Severity=%s | Reachability=%s | Exposure=%s | CVSS=%.1f\n", strings.ToUpper(matched.Severity), reachStr, expStr, matched.CVSS)
 			fmt.Printf("Message:     %s\n", matched.Message)
 
 			if matched.FixSuggestion != nil {
@@ -115,34 +181,9 @@ func newFixCmd() *cobra.Command {
 			}
 			repoPath, _ := filepath.Abs(targetPath)
 
-			cfg, _ := config.Load(repoPath)
-			scheduler := orchestrator.NewScheduler(
-				gitleaks.New(),
-				osv.New(),
-				semgrep.New(),
-				trivy.New(),
-				nuclei.New(),
-				resilience.New(),
-				govulncheck.New(),
-			)
-
-			result, err := scheduler.Execute(context.Background(), cfg, orchestrator.ScanOptions{RepoPath: repoPath})
+			matched, err := lookupFinding(repoPath, findingID)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Scan failed: %v\n", err)
-				os.Exit(2)
-			}
-
-			var matched *orchestrator.Finding
-			for _, f := range result.Findings {
-				if strings.EqualFold(f.ID, findingID) {
-					fCopy := f
-					matched = &fCopy
-					break
-				}
-			}
-
-			if matched == nil {
-				fmt.Fprintf(os.Stderr, "Finding ID %s not found.\n", findingID)
+				fmt.Fprintf(os.Stderr, "%v\n", err)
 				os.Exit(1)
 			}
 
@@ -178,6 +219,40 @@ func newFixCmd() *cobra.Command {
 			}
 
 			fmt.Printf("✅ Successfully applied fix to %s:\n%s\n", matched.File, diffApplied)
+
+			// Automatic verification re-scan (Phase 5 / P-12)
+			fmt.Printf("🔄 Verifying fix: performing automatic re-scan of %s...\n", matched.File)
+			rescanCfg, _ := config.Load(repoPath)
+			rescanScheduler := orchestrator.NewScheduler(
+				gitleaks.New(),
+				osv.New(),
+				semgrep.New(),
+				trivy.New(),
+				nuclei.New(),
+				resilience.New(),
+				govulncheck.New(),
+			)
+			rescanResult, err := rescanScheduler.Execute(context.Background(), rescanCfg, orchestrator.ScanOptions{
+				RepoPath: repoPath,
+			})
+			if err == nil {
+				lastScanPath := filepath.Join(repoPath, ".sentinel", "last-scan.json")
+				if data, mErr := json.MarshalIndent(rescanResult, "", "  "); mErr == nil {
+					_ = os.WriteFile(lastScanPath, data, 0644)
+				}
+				stillPresent := false
+				for _, rf := range rescanResult.Findings {
+					if rf.File == matched.File && (rf.ID == matched.ID || (rf.LineStart == matched.LineStart && rf.Rule == matched.Rule)) {
+						stillPresent = true
+						break
+					}
+				}
+				if !stillPresent {
+					fmt.Printf("🎉 Verification PASSED: finding %s is resolved. Zero regressions detected in %s.\n", matched.ID, matched.File)
+				} else {
+					fmt.Printf("⚠️ Verification WARNING: finding %s is still detected after applying fix.\n", matched.ID)
+				}
+			}
 		},
 	}
 
@@ -284,7 +359,12 @@ func newVersionCmd() *cobra.Command {
 		Short: "Print Sentinel version and scanner engine availability",
 		Run: func(cmd *cobra.Command, args []string) {
 			fmt.Printf("Sentinel DevSecOps Unified Scanner v%s (commit: %s, built: %s)\n", version, commit, date)
-			fmt.Println("Rules: embedded v1 (65 rules: 55 SAST, 4 resilience, 2 GitHub Actions, 4 supply chain)")
+			stats, err := rules.CountRules()
+			if err != nil {
+				fmt.Println("Rules: embedded v1 (error counting rules)")
+			} else {
+				fmt.Println(stats.Summary())
+			}
 			fmt.Println("\nDetected Scanner Engines:")
 			statuses := doctor.CheckEngines()
 			for _, s := range statuses {

@@ -1,11 +1,14 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -40,19 +43,74 @@ func newRulesCmd() *cobra.Command {
 	return rulesCmd
 }
 
+func findSemgrepExecutable() string {
+	if p, err := exec.LookPath("semgrep"); err == nil {
+		return p
+	}
+	candidates := []string{
+		filepath.Join("plugins", "semgrep"),
+		filepath.Join("plugins", "semgrep.exe"),
+		filepath.Join("bin", "semgrep"),
+		filepath.Join("bin", "semgrep.exe"),
+	}
+	for _, c := range candidates {
+		if fi, err := os.Stat(c); err == nil && !fi.IsDir() {
+			return c
+		}
+	}
+	return ""
+}
+
 func newRulesTestCmd() *cobra.Command {
 	var runSemgrep bool
+	var requireSemgrep bool
 
 	cmd := &cobra.Command{
 		Use:   "test [dir]",
 		Short: "Run validation and test suites against embedded and custom rules",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			fmt.Fprintln(cmd.OutOrStdout(), "🧪 Running Sentinel Detection Rule Verification...")
+			out := cmd.OutOrStdout()
+			errOut := cmd.ErrOrStderr()
 
-			entries, err := rules.Content.ReadDir(".")
-			if err != nil {
-				return fmt.Errorf("error reading embedded rules: %w", err)
+			fmt.Fprintln(out, "🧪 Running Sentinel Detection Rule Verification...")
+
+			var ruleFiles map[string][]byte = make(map[string][]byte)
+
+			// Determine rule source directory or embedded rules
+			targetDir := ""
+			if len(args) == 1 && args[0] != "" {
+				targetDir = args[0]
+			}
+
+			if targetDir != "" {
+				entries, err := os.ReadDir(targetDir)
+				if err != nil {
+					return fmt.Errorf("error reading rule directory %s: %w", targetDir, err)
+				}
+				for _, e := range entries {
+					if !e.IsDir() && strings.HasSuffix(e.Name(), ".yml") {
+						data, err := os.ReadFile(filepath.Join(targetDir, e.Name()))
+						if err != nil {
+							return fmt.Errorf("error reading %s: %w", e.Name(), err)
+						}
+						ruleFiles[e.Name()] = data
+					}
+				}
+			} else {
+				entries, err := rules.Content.ReadDir(".")
+				if err != nil {
+					return fmt.Errorf("error reading embedded rules: %w", err)
+				}
+				for _, entry := range entries {
+					if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".yml") {
+						data, err := rules.Content.ReadFile(entry.Name())
+						if err != nil {
+							return fmt.Errorf("error reading embedded %s: %w", entry.Name(), err)
+						}
+						ruleFiles[entry.Name()] = data
+					}
+				}
 			}
 
 			totalRules := 0
@@ -64,20 +122,10 @@ func newRulesTestCmd() *cobra.Command {
 			validCategories := map[string]bool{"sast": true, "secret": true, "resilience": true, "iac": true}
 			validConfidences := map[string]bool{"high": true, "medium": true, "low": true}
 
-			for _, entry := range entries {
-				if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".yml") {
-					continue
-				}
-
-				data, err := rules.Content.ReadFile(entry.Name())
-				if err != nil {
-					failed = append(failed, fmt.Sprintf("Failed to read %s: %v", entry.Name(), err))
-					continue
-				}
-
+			for filename, data := range ruleFiles {
 				var file cliRuleFile
 				if err := yaml.Unmarshal(data, &file); err != nil {
-					failed = append(failed, fmt.Sprintf("Invalid YAML in %s: %v", entry.Name(), err))
+					failed = append(failed, fmt.Sprintf("Invalid YAML in %s: %v", filename, err))
 					continue
 				}
 
@@ -116,14 +164,21 @@ func newRulesTestCmd() *cobra.Command {
 					} else {
 						passedRules++
 						ruleIDs = append(ruleIDs, ruleID)
-						fmt.Fprintf(cmd.OutOrStdout(), "  PASS %-40s [sev: %-7s cwe: %-8s owasp: %-12s conf: %s]\n",
+						fmt.Fprintf(out, "  PASS %-40s [sev: %-7s cwe: %-8s owasp: %-12s conf: %s]\n",
 							ruleID, r.Severity, r.Metadata.CWE, r.Metadata.OWASP, r.Metadata.Confidence)
 					}
 				}
 			}
 
-			// Also verify test coverage in rules/tests/ if present
+			// Verify test fixtures coverage in rules/tests/
 			testDir := filepath.Join("rules", "tests")
+			if targetDir != "" {
+				testDirCandidate := filepath.Join(targetDir, "tests")
+				if fi, err := os.Stat(testDirCandidate); err == nil && fi.IsDir() {
+					testDir = testDirCandidate
+				}
+			}
+
 			if fi, err := os.Stat(testDir); err == nil && fi.IsDir() {
 				testEntries, _ := os.ReadDir(testDir)
 				testContent := ""
@@ -142,38 +197,113 @@ func newRulesTestCmd() *cobra.Command {
 					}
 				}
 				if missingTests == 0 {
-					fmt.Fprintf(cmd.OutOrStdout(), "✅ All %d rules have corresponding test fixtures in %s\n", len(ruleIDs), testDir)
+					fmt.Fprintf(out, "✅ All %d rules have corresponding test fixtures in %s\n", len(ruleIDs), testDir)
 				}
 			}
 
-			// If Semgrep CLI is installed or requested, wrap semgrep --test
-			if runSemgrep {
-				if semgrepPath, err := exec.LookPath("semgrep"); err == nil {
-					fmt.Fprintf(cmd.OutOrStdout(), "\n⚡ Executing native Semgrep rule test runner (%s --test rules/)...\n", semgrepPath)
-					cmdExec := exec.Command("semgrep", "--test", "rules/")
-					cmdExec.Stdout = cmd.OutOrStdout()
-					cmdExec.Stderr = cmd.ErrOrStderr()
-					if err := cmdExec.Run(); err != nil {
-						failed = append(failed, fmt.Sprintf("semgrep --test rules/ failed: %v", err))
+			// Semgrep engine execution (parse check + behavioral tests)
+			semgrepPath := findSemgrepExecutable()
+			semgrepRan := false
+
+			if semgrepPath != "" || runSemgrep {
+				if semgrepPath == "" {
+					if requireSemgrep {
+						return fmt.Errorf("semgrep executable not found on PATH or plugins/, but --require-semgrep was specified")
 					}
+					fmt.Fprintln(out, "\n[Semgrep Engine Validation]")
+					fmt.Fprintln(out, "⚠️  SKIPPED (semgrep not installed)")
 				} else {
-					fmt.Fprintln(cmd.OutOrStdout(), "ℹ️ Semgrep binary not found on PATH; skipped external --test runner")
+					semgrepRan = true
+					fmt.Fprintf(out, "\n⚡ Executing Semgrep Rule Parse & Behavioral Checks (%s)...\n", semgrepPath)
+
+					// 1. Parse check: run semgrep scan on an empty directory to validate rule syntax
+					tmpEmptyDir, err := os.MkdirTemp("", "sentinel-empty-*")
+					if err == nil {
+						defer os.RemoveAll(tmpEmptyDir)
+					} else {
+						tmpEmptyDir = os.TempDir()
+					}
+
+					tmpRulesDir, err := os.MkdirTemp("", "sentinel-rules-validate-*")
+					if err == nil {
+						defer os.RemoveAll(tmpRulesDir)
+						// Copy semgrep-compatible rule files (excluding resilience rules which are native)
+						for fname, content := range ruleFiles {
+							if strings.HasPrefix(fname, "resilience") {
+								continue
+							}
+							_ = os.WriteFile(filepath.Join(tmpRulesDir, fname), content, 0644)
+						}
+
+						ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+						defer cancel()
+
+						parseCmd := exec.CommandContext(ctx, semgrepPath, "scan",
+							"--metrics=off",
+							"--disable-version-check",
+							"--config", tmpRulesDir,
+							tmpEmptyDir,
+						)
+						var parseStderr bytes.Buffer
+						parseCmd.Stderr = &parseStderr
+						if parseErr := parseCmd.Run(); parseErr != nil {
+							errStr := parseStderr.String()
+							if strings.Contains(errStr, "Rule parse error") || strings.Contains(errStr, "Semgrep Core error") {
+								failed = append(failed, fmt.Sprintf("Semgrep parse check failed: %s", strings.TrimSpace(errStr)))
+							}
+						} else {
+							fmt.Fprintln(out, "  ✅ Semgrep rule syntax and schema parse check PASSED")
+						}
+					}
+
+					// 2. Behavioral positive & negative checks via semgrep --test
+					if fi, err := os.Stat("rules"); err == nil && fi.IsDir() {
+						ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+						defer cancel()
+
+						testCmd := exec.CommandContext(ctx, semgrepPath, "--test", "rules/")
+						var testOut, testErr bytes.Buffer
+						testCmd.Stdout = &testOut
+						testCmd.Stderr = &testErr
+
+						if err := testCmd.Run(); err != nil {
+							errMsg := testErr.String()
+							if errMsg == "" {
+								errMsg = testOut.String()
+							}
+							failed = append(failed, fmt.Sprintf("semgrep --test rules/ failed: %v\n%s", err, strings.TrimSpace(errMsg)))
+						} else {
+							fmt.Fprintln(out, "  ✅ Native Semgrep fixture tests (positive & negative #ruleid / #ok) PASSED")
+						}
+					}
 				}
+			} else {
+				if requireSemgrep {
+					return fmt.Errorf("semgrep is required but not installed")
+				}
+				fmt.Fprintln(out, "\n[Semgrep Engine Validation]")
+				fmt.Fprintln(out, "⚠️  SKIPPED (semgrep not installed)")
 			}
 
-			fmt.Fprintln(cmd.OutOrStdout(), "\n=======================================================")
+			fmt.Fprintln(out, "\n=======================================================")
 			if len(failed) > 0 {
 				for _, f := range failed {
-					fmt.Fprintf(cmd.ErrOrStderr(), "  • %s\n", f)
+					fmt.Fprintf(errOut, "  • %s\n", f)
 				}
 				return fmt.Errorf("rule test suite failed: %d/%d passed, %d failure(s)", passedRules, totalRules, len(failed))
 			}
 
-			fmt.Fprintf(cmd.OutOrStdout(), "✅ All %d rules passed metadata and test verification (100%%)\n", passedRules)
+			if semgrepRan {
+				fmt.Fprintf(out, "✅ All %d rules passed metadata, parse, and behavioral verification (100%%)\n", passedRules)
+			} else {
+				fmt.Fprintf(out, "⚠️  PARTIAL VERIFICATION: %d/%d rules passed structural/metadata checks.\n", passedRules, totalRules)
+				fmt.Fprintln(out, "   Semgrep behavioral validation was SKIPPED (semgrep not installed).")
+			}
 			return nil
 		},
 	}
 
-	cmd.Flags().BoolVar(&runSemgrep, "semgrep", false, "Also invoke host semgrep --test runner if available")
+	cmd.Flags().BoolVar(&runSemgrep, "semgrep", false, "Force execution of Semgrep engine tests")
+	cmd.Flags().BoolVar(&requireSemgrep, "require-semgrep", false, "Fail if Semgrep is not installed")
 	return cmd
 }

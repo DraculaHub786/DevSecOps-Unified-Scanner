@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -22,6 +23,7 @@ import (
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/config"
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/orchestrator"
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/report"
+	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/threatmodel"
 )
 
 func newScanCmd() *cobra.Command {
@@ -46,6 +48,8 @@ func newScanCmd() *cobra.Command {
 		offline         bool
 		noColor         bool
 		trustRepoPolicy bool
+		allFlag         bool
+		quickFlag       bool
 	)
 
 	cmd := &cobra.Command{
@@ -80,6 +84,8 @@ func newScanCmd() *cobra.Command {
 				authorized,
 				sinceRef,
 				trustRepoPolicy,
+				allFlag,
+				quickFlag,
 			)
 		},
 	}
@@ -103,6 +109,8 @@ func newScanCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&offline, "offline", false, "Disable network requests")
 	cmd.Flags().BoolVar(&noColor, "no-color", false, "Disable ANSI color output in terminal")
 	cmd.Flags().BoolVar(&trustRepoPolicy, "trust-repo-policy", false, "In --ci, accept a .sentinel.yml found inside the scanned repository (default: refuse; use --config with a trusted policy)")
+	cmd.Flags().BoolVar(&allFlag, "all", false, "Unified scan: all checks + container images, git history, SBOM, and threat model into a single combined report")
+	cmd.Flags().BoolVar(&quickFlag, "quick", false, "Quick pre-commit scan: changed files only, secrets and SAST")
 
 	return cmd
 }
@@ -125,6 +133,8 @@ func runScanInternal(
 	authorized bool,
 	sinceRef string,
 	trustRepoPolicy bool,
+	allFlag bool,
+	quickFlag bool,
 ) {
 	absRepo, err := filepath.Abs(repoPath)
 	if err != nil {
@@ -177,6 +187,20 @@ func runScanInternal(
 		cfg.Scanners.DAST.Target = targetURL
 	}
 
+	// Scan profiles (Phase 3)
+	if quickFlag {
+		changedOnly = true
+		if len(onlyCategories) == 0 {
+			onlyCategories = []string{"secrets", "sast"}
+		}
+	}
+	if allFlag {
+		cfg.Scanners.Secrets.ScanHistory = true
+		cfg.Scanners.Resilience.Enabled = true
+		onlyCategories = nil
+		skipCategories = nil
+	}
+
 	if sinceRef != "" {
 		changedOnly = true
 		changedFiles = detectGitChangedSince(absRepo, sinceRef)
@@ -212,6 +236,53 @@ func runScanInternal(
 		os.Exit(2)
 	}
 
+	// Unified Scan Profile --all enhancements
+	if allFlag {
+		images := discoverContainerImages(absRepo)
+		if len(images) > 0 {
+			fmt.Printf("🐳 [Scan --all] Discovered %d container images: %s\n", len(images), strings.Join(images, ", "))
+			for _, img := range images {
+				imgFindings, err := trivy.ScanImage(context.Background(), img)
+				if err == nil && len(imgFindings) > 0 {
+					result.Findings = append(result.Findings, imgFindings...)
+				}
+			}
+		}
+
+		// Generate SBOM into .sentinel/reports/bom.cdx.json
+		sbomPath := filepath.Join(absRepo, ".sentinel", "reports", "bom.cdx.json")
+		_ = os.MkdirAll(filepath.Dir(sbomPath), 0755)
+		if err := trivy.GenerateSBOM(context.Background(), absRepo, "cyclonedx", sbomPath); err == nil {
+			fmt.Printf("📦 [Scan --all] SBOM saved to: %s\n", sbomPath)
+		}
+
+		// Generate Threat Model into .sentinel/reports/threat-model.md
+		tmPath := filepath.Join(absRepo, ".sentinel", "reports", "threat-model.md")
+		_ = os.MkdirAll(filepath.Dir(tmPath), 0755)
+		if tmReport, err := threatmodel.GenerateThreatModel(absRepo, result.Findings); err == nil {
+			_ = os.WriteFile(tmPath, []byte(tmReport.RenderMarkdown()), 0644)
+			fmt.Printf("🗺️ [Scan --all] Threat Model saved to: %s\n", tmPath)
+		}
+
+		// Re-correlate and recalculate summary counts
+		result.Findings = orchestrator.CorrelateAndDeduplicate(result.Findings)
+		result.Summary = orchestrator.SeveritySummary{Total: len(result.Findings)}
+		for _, f := range result.Findings {
+			switch strings.ToLower(f.Severity) {
+			case "critical":
+				result.Summary.Critical++
+			case "high":
+				result.Summary.High++
+			case "medium":
+				result.Summary.Medium++
+			case "low":
+				result.Summary.Low++
+			case "info":
+				result.Summary.Info++
+			}
+		}
+	}
+
 	// Filter baseline if requested
 	if useBaseline {
 		if baselineSet, err := baseline.Load(absRepo); err == nil {
@@ -227,6 +298,13 @@ func runScanInternal(
 	// Save to local SQLite history
 	if store, err := report.NewSQLiteStore(absRepo); err == nil {
 		_ = store.RecordScan(result, getGitCommit(absRepo))
+	}
+
+	// Save to .sentinel/last-scan.json cache for instant explain / fix commands (P-11)
+	lastScanFile := filepath.Join(absRepo, ".sentinel", "last-scan.json")
+	_ = os.MkdirAll(filepath.Dir(lastScanFile), 0755)
+	if data, err := json.MarshalIndent(result, "", "  "); err == nil {
+		_ = os.WriteFile(lastScanFile, data, 0644)
 	}
 
 	// Render requested formats
@@ -383,4 +461,56 @@ func detectGitChangedSince(repoPath, ref string) []string {
 	}
 
 	return changed
+}
+
+func discoverContainerImages(repoPath string) []string {
+	var images []string
+	seen := make(map[string]bool)
+
+	_ = filepath.Walk(repoPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil
+		}
+		base := strings.ToLower(info.Name())
+		if base == "dockerfile" || strings.HasPrefix(base, "dockerfile.") || strings.HasSuffix(base, ".dockerfile") {
+			content, err := os.ReadFile(path)
+			if err == nil {
+				lines := strings.Split(string(content), "\n")
+				for _, line := range lines {
+					line = strings.TrimSpace(line)
+					if strings.HasPrefix(strings.ToUpper(line), "FROM ") {
+						parts := strings.Fields(line)
+						if len(parts) >= 2 {
+							img := parts[1]
+							if !strings.EqualFold(img, "scratch") && !strings.Contains(img, "$") && !seen[img] {
+								seen[img] = true
+								images = append(images, img)
+							}
+						}
+					}
+				}
+			}
+		}
+		if base == "docker-compose.yml" || base == "docker-compose.yaml" || base == "compose.yml" || base == "compose.yaml" {
+			content, err := os.ReadFile(path)
+			if err == nil {
+				lines := strings.Split(string(content), "\n")
+				for _, line := range lines {
+					line = strings.TrimSpace(line)
+					if strings.HasPrefix(line, "image:") {
+						parts := strings.Fields(line)
+						if len(parts) >= 2 {
+							img := strings.Trim(parts[1], `"'`)
+							if img != "" && !seen[img] {
+								seen[img] = true
+								images = append(images, img)
+							}
+						}
+					}
+				}
+			}
+		}
+		return nil
+	})
+	return images
 }

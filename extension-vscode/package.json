@@ -2,7 +2,7 @@
   "name": "sentinel-vscode",
   "displayName": "Sentinel DevSecOps Unified Scanner",
   "description": "Unified SAST, SCA, secrets, IaC, and resilience scanner with inline diagnostics and auto-remediation.",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "publisher": "draculahub786",
   "license": "Apache-2.0",
   "icon": "media/shield.png",
@@ -10,6 +10,23 @@
     "type": "git",
     "url": "https://github.com/DraculaHub786/DevSecOps-Unified-Scanner"
   },
+  "bugs": {
+    "url": "https://github.com/DraculaHub786/DevSecOps-Unified-Scanner/issues"
+  },
+  "homepage": "https://github.com/DraculaHub786/DevSecOps-Unified-Scanner#readme",
+  "keywords": [
+    "security",
+    "sast",
+    "sca",
+    "secrets",
+    "iac",
+    "vulnerability",
+    "devsecops",
+    "semgrep",
+    "gitleaks",
+    "trivy",
+    "remediation"
+  ],
   "engines": {
     "vscode": "^1.80.0"
   },
@@ -223,6 +240,7 @@
   "devDependencies": {
     "@types/node": "^20.11.0",
     "@types/vscode": "^1.80.0",
+    "@vscode/test-electron": "^3.1.0",
     "@vscode/vsce": "2.24.0",
     "typescript": "^5.3.3"
   }

@@ -6,10 +6,11 @@ $ErrorActionPreference = "Stop"
 
 $RootDir = Resolve-Path (Join-Path $PSScriptRoot "..")
 $Binary = Join-Path $RootDir "bin/sentinel.exe"
+$TargetVersion = (Get-Content (Join-Path $RootDir "VERSION") -Raw).Trim()
 
 Write-Host "=================================================================" -ForegroundColor Cyan
 Write-Host "🛡️  SENTINEL AUTOMATED ACCEPTANCE SUITE (AT-01 to AT-34)" -ForegroundColor Cyan
-Write-Host "Target Version: 1.0.1 | Date: $((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'))"
+Write-Host "Target Version: $TargetVersion | Date: $((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'))"
 Write-Host "=================================================================" -ForegroundColor Cyan
 
 $Passed = 0
@@ -34,13 +35,13 @@ function Run-Check {
 
 # Ensure binary is built
 if (-not (Test-Path $Binary)) {
-    go build -trimpath -ldflags="-s -w -X main.version=1.0.1" -o $Binary (Join-Path $RootDir "cmd/sentinel")
+    go build -trimpath -ldflags="-s -w -X main.version=$TargetVersion" -o $Binary (Join-Path $RootDir "cmd/sentinel")
 }
 
 # AT-01
-Run-Check "AT-01" "Sentinel CLI version reports 1.0.1" {
+Run-Check "AT-01" "Sentinel CLI version reports $TargetVersion" {
     $out = (& $Binary version | Out-String)
-    if ($out -notmatch "v1\.0\.1") { throw "Expected version 1.0.1, got: $out" }
+    if ($out -notmatch "v$([regex]::Escape($TargetVersion))") { throw "Expected version $TargetVersion, got: $out" }
 }
 
 # AT-02
@@ -140,11 +141,11 @@ Run-Check "AT-15" "Tool checksum verification (plugins/checksums.txt)" {
 # AT-16
 Run-Check "AT-16" "Version stamping consistency across CLI, docs, Docker" {
     $formula = Get-Content (Join-Path $RootDir "Formula/sentinel.rb") -Raw
-    if ($formula -notmatch "v1\.0\.1") { throw "Formula version mismatch" }
+    if ($formula -notmatch "v$([regex]::Escape($TargetVersion))") { throw "Formula version mismatch" }
     $docker = Get-Content (Join-Path $RootDir "Dockerfile") -Raw
-    if ($docker -notmatch "1\.0\.1") { throw "Dockerfile version mismatch" }
+    if ($docker -notmatch "$([regex]::Escape($TargetVersion))") { throw "Dockerfile version mismatch" }
     $action = Get-Content (Join-Path $RootDir "deploy/github-actions/sentinel-scan/action.yml") -Raw
-    if ($action -notmatch "v1\.0\.1") { throw "Action version mismatch" }
+    if ($action -notmatch "v$([regex]::Escape($TargetVersion))") { throw "Action version mismatch" }
 }
 
 # AT-17
@@ -166,8 +167,9 @@ Run-Check "AT-18" "Pinned GitHub Actions dependencies (SHAs) & Dependabot" {
 # AT-19
 Run-Check "AT-19" "Multi-platform release artifact building (6 archives)" {
     $distDir = Join-Path $RootDir "dist"
-    $zips = Get-ChildItem -Path $distDir -Filter "sentinel_1.0.1_*.zip"
-    $tars = Get-ChildItem -Path $distDir -Filter "sentinel_1.0.1_*.tar.gz"
+    & (Join-Path $RootDir "scripts/build-release-artifacts.ps1") -Version $TargetVersion | Out-Null
+    $zips = Get-ChildItem -Path $distDir -Filter "sentinel_${TargetVersion}_*.zip"
+    $tars = Get-ChildItem -Path $distDir -Filter "sentinel_${TargetVersion}_*.tar.gz"
     if (($zips.Count + $tars.Count) -lt 6) { throw "Expected 6 release archives in dist/" }
     if (-not (Test-Path (Join-Path $distDir "checksums.txt"))) { throw "checksums.txt missing in dist/" }
 }
@@ -182,7 +184,7 @@ Run-Check "AT-20" "Technical documentation suite (rules, ci, extension, security
 }
 
 # AT-21
-Run-Check "AT-21" "Embedded 65 rules test suite (sentinel rules test)" {
+Run-Check "AT-21" "Embedded 78 rules test suite (sentinel rules test)" {
     $out = (& $Binary rules test | Out-String)
     if ($out -notmatch "PASS") { throw "rules test failed" }
 }

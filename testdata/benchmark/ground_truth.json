@@ -1,0 +1,38 @@
+[
+  {
+    "category": "secret",
+    "file": "vulnerable/app.js",
+    "line": 4,
+    "rule": "aws-access-key-id"
+  },
+  {
+    "category": "sast",
+    "file": "vulnerable/app.js",
+    "line": 9,
+    "rule": "sast-command-injection"
+  },
+  {
+    "category": "sast",
+    "file": "vulnerable/app.js",
+    "line": 16,
+    "rule": "sast-sql-injection-concat"
+  },
+  {
+    "category": "secret",
+    "file": "vulnerable/app.py",
+    "line": 5,
+    "rule": "github-pat"
+  },
+  {
+    "category": "sast",
+    "file": "vulnerable/app.py",
+    "line": 9,
+    "rule": "sast-command-injection"
+  },
+  {
+    "category": "sast",
+    "file": "vulnerable/app.py",
+    "line": 13,
+    "rule": "sast-tls-skip-verify"
+  }
+]

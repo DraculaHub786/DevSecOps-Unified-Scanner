@@ -39,11 +39,41 @@ jobs:
       - name: Build Sentinel Binary
         run: go build -o bin/sentinel ./cmd/sentinel
 
+      - name: Setup Python for Semgrep
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
+        with:
+          python-version: '3.11'
+
+      - name: Install Pinned Scanner Engines & Semgrep
+        run: |
+          bash plugins/install.sh
+          . plugins/versions.env
+          pip install --no-cache-dir "semgrep==${SEMGREP_VERSION}"
+          echo "$PWD/plugins" >> $GITHUB_PATH
+
+      - name: Rule Pack Loads in Real Semgrep
+        run: |
+          mkdir -p "$RUNNER_TEMP/rp" "$RUNNER_TEMP/empty"
+          for f in rules/*.yml; do case "$(basename "$f")" in resilience*) ;; *) cp "$f" "$RUNNER_TEMP/rp/";; esac; done
+          semgrep scan --metrics=off --disable-version-check --config "$RUNNER_TEMP/rp" "$RUNNER_TEMP/empty"
+
+      - name: Rule Tests (Sentinel and Semgrep)
+        run: ./bin/sentinel rules test --semgrep
+
+      - name: Pull Request Security Flow
+        run: bash scripts/pr-flow.sh
+
       - name: SARIF Output and Schema Check
         run: |
           ./bin/sentinel scan testdata/vulnerable-app --format sarif --out /tmp/test.sarif
           grep '"version": "2.1.0"' /tmp/test.sarif
           grep 'sarif-schema-2.1.0.json' /tmp/test.sarif
+
+      - name: End-to-End Full Gate (e2e-full)
+        run: bash scripts/e2e-full.sh
+
+      - name: Acceptance Suite
+        run: SKIP_ONLINE=1 BIN=./bin/sentinel bash scripts/acceptance.sh
 
       - name: Egress Test (Zero Network Verification)
         run: |

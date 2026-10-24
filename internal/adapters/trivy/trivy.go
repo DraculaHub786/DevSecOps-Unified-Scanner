@@ -690,7 +690,7 @@ func generateNativeSBOM(repoPath, format, outputPath string) error {
 				{
 					Vendor:  "Sentinel",
 					Name:    "sentinel-lite-sbom",
-					Version: "1.0.1",
+					Version: "1.0.2",
 				},
 			},
 			Component: cdxComponent{

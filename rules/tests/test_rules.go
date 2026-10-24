@@ -73,6 +73,9 @@ func ok(db *sql.DB, input string) {
 	// ok: org-go-sql-injection-sprintf
 	db.Query("SELECT * FROM users WHERE id = ?", input)
 
+	// ok: org-go-sql-injection-concat
+	db.Exec("SELECT * FROM users WHERE id = ?", input)
+
 	// ok: org-go-command-injection-sh
 	exec.Command("ls", "-la")
 }

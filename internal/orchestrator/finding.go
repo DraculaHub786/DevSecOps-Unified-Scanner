@@ -37,7 +37,8 @@ const (
 // Engine provenance
 const (
 	EngineExternal = "external" // real tool ran (e.g., semgrep, gitleaks, trivy CLI)
-	EngineEmbedded = "embedded" // built-in lite engine ran
+	EngineEmbedded = "embedded" // built-in lite fallback engine ran
+	EngineNative   = "native"   // first-party engine by design (e.g., resilience, threat modeling)
 )
 
 // Finding represents a unified normalized security flaw across all scanners.
@@ -55,15 +56,17 @@ type Finding struct {
 	LineStart     int       `json:"line_start"`
 	LineEnd       int       `json:"line_end"`
 	Message       string    `json:"message"`
-	Snippet       string    `json:"snippet,omitempty"`
-	OWASP         string    `json:"owasp,omitempty"`
-	Reachable     *bool     `json:"reachable,omitempty"`
-	Exposed       *bool     `json:"exposed,omitempty"`
-	RiskScore     float64   `json:"risk_score"`
-	License       string    `json:"license,omitempty"`
-	FixSuggestion *Fix      `json:"fix_suggestion,omitempty"`
-	FirstSeen     time.Time `json:"first_seen"`
-	Fingerprint   string    `json:"fingerprint"`
+	Snippet           string    `json:"snippet,omitempty"`
+	OWASP             string    `json:"owasp,omitempty"`
+	Reachable         *bool     `json:"reachable,omitempty"`
+	ReachabilityLevel string    `json:"reachability_level,omitempty"` // "proven" | "imported" | "unimported" | "unknown"
+	Exposed           *bool     `json:"exposed,omitempty"`
+	RiskScore         float64   `json:"risk_score"`
+	License           string    `json:"license,omitempty"`
+	FixSuggestion     *Fix      `json:"fix_suggestion,omitempty"`
+	FirstSeen         time.Time `json:"first_seen"`
+	Fingerprint       string    `json:"fingerprint"`
+	Sources           []string  `json:"sources,omitempty"`
 }
 
 // Fix describes an automated or guided remediation proposal.

@@ -61,8 +61,8 @@ app.get('/test', (req, res) => res.send("ok"));
 		if f.Category != orchestrator.CategoryResilience {
 			t.Errorf("Expected category %s, got %s", orchestrator.CategoryResilience, f.Category)
 		}
-		if f.Engine != orchestrator.EngineEmbedded {
-			t.Errorf("Expected engine embedded for resilience, got %s", f.Engine)
+		if f.Engine != orchestrator.EngineNative {
+			t.Errorf("Expected engine native for resilience, got %s", f.Engine)
 		}
 	}
 

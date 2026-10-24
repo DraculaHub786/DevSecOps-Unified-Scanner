@@ -43,7 +43,7 @@ git commit -m "chore: commit baseline"
 echo "2. Simulating PR introducing a new high-severity finding..."
 git checkout -b feature/vulnerable-change
 PAT_PREFIX="ghp"
-PAT_BODY="0123456789abcdefghijklmnopqrstuvwxyz"
+PAT_BODY="R8kD3mZq1Xv7LpN2sT9wYb4HcF6jGa0UeQ5o"
 cat << EOF > app.js
 const GITHUB_TOKEN = "${PAT_PREFIX}_${PAT_BODY}";
 console.log("Compromised token:", GITHUB_TOKEN);

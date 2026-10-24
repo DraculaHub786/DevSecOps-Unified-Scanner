@@ -1,0 +1,41 @@
+services:
+  sentinel-db:
+    image: postgres:16-alpine
+    container_name: sentinel-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: sentinel
+      POSTGRES_USER: sentinel
+      POSTGRES_PASSWORD: sentinel_secure_password_replace_in_prod
+    volumes:
+      - sentinel-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sentinel"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - sentinel-net
+
+  sentinel-server:
+    image: ghcr.io/draculahub786/sentinel:v1.0.2
+    container_name: sentinel-server
+    restart: unless-stopped
+    depends_on:
+      sentinel-db:
+        condition: service_healthy
+    environment:
+      PORT: 8080
+      DATABASE_URL: postgres://sentinel:sentinel_secure_password_replace_in_prod@sentinel-db:5432/sentinel?sslmode=disable
+      LOCAL_FIRST_ENFORCE: "true"
+    ports:
+      - "8080:8080"
+    networks:
+      - sentinel-net
+
+volumes:
+  sentinel-db-data:
+
+networks:
+  sentinel-net:
+    driver: bridge

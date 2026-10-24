@@ -30,11 +30,18 @@ func CalculateRiskScore(f *Finding) float64 {
 		baseScore = (baseScore * 0.6) + (cvssFactor * 40.0)
 	}
 
-	// Reachability multiplier
-	// If a vulnerable dependency method is actually imported / called in repo source code,
-	// the risk is immediate. If it is only transitive or dormant, discount.
+	// Reachability multiplier (P-13)
+	// - proven (call-graph level verified by govulncheck): 1.35x
+	// - imported (actively imported in non-test application source code): 1.25x
+	// - unimported / unreachable: 0.65x
 	reachabilityMultiplier := 1.0
-	if f.Reachable != nil {
+	if f.ReachabilityLevel == "proven" {
+		reachabilityMultiplier = 1.35
+	} else if f.ReachabilityLevel == "imported" {
+		reachabilityMultiplier = 1.25
+	} else if f.ReachabilityLevel == "unimported" {
+		reachabilityMultiplier = 0.65
+	} else if f.Reachable != nil {
 		if *f.Reachable {
 			reachabilityMultiplier = 1.35
 		} else {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -68,9 +69,49 @@ type osvScanOutput struct {
 	} `json:"results"`
 }
 
+// isOSVReachable probes api.osv.dev so offline or firewalled runs degrade immediately
+func isOSVReachable() bool {
+	conn, err := net.DialTimeout("tcp", "api.osv.dev:443", 2*time.Second)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
+
+func isOSVNetworkError(text string) bool {
+	lower := strings.ToLower(text)
+	patterns := []string{
+		"failed to query",
+		"connection refused",
+		"no such host",
+		"network is unreachable",
+		"i/o timeout",
+		"context deadline exceeded",
+		"temporary failure in name resolution",
+		"dial tcp",
+		"api.osv.dev",
+	}
+	for _, p := range patterns {
+		if strings.Contains(lower, p) {
+			return true
+		}
+	}
+	return false
+}
+
 func (a *OSVAdapter) Run(ctx context.Context, repoPath string, cfg *config.Config, discovery *orchestrator.DiscoveryResult) ([]orchestrator.Finding, error) {
 	if !cfg.Scanners.SCA.Enabled {
 		return nil, nil
+	}
+
+	// P-09: In offline mode, degrade to embedded advisory list
+	if cfg.Offline {
+		findings, fallbackErr := a.runNativeFallback(repoPath, cfg, discovery)
+		if fallbackErr != nil {
+			return nil, fallbackErr
+		}
+		return findings, fmt.Errorf("%w: offline mode; used embedded advisory list", orchestrator.ErrDegraded)
 	}
 
 	binPath, err := exec.LookPath("osv-scanner")
@@ -81,16 +122,42 @@ func (a *OSVAdapter) Run(ctx context.Context, repoPath string, cfg *config.Confi
 		return a.runNativeFallback(repoPath, cfg, discovery)
 	}
 
-	return a.runCLI(ctx, binPath, repoPath, cfg, discovery)
+	// If api.osv.dev is not reachable, gracefully degrade to embedded advisory list
+	if !isOSVReachable() {
+		findings, fallbackErr := a.runNativeFallback(repoPath, cfg, discovery)
+		if fallbackErr != nil {
+			return nil, fallbackErr
+		}
+		return findings, fmt.Errorf("%w: network unreachable (api.osv.dev); used embedded advisory list", orchestrator.ErrDegraded)
+	}
+
+	findings, err := a.runCLI(ctx, binPath, repoPath, cfg, discovery)
+	if err != nil {
+		if isOSVNetworkError(err.Error()) {
+			fallbackFindings, fallbackErr := a.runNativeFallback(repoPath, cfg, discovery)
+			if fallbackErr == nil {
+				return fallbackFindings, fmt.Errorf("%w: network error (%v); used embedded advisory list", orchestrator.ErrDegraded, err)
+			}
+		}
+		return nil, err
+	}
+	return findings, nil
 }
 
 func (a *OSVAdapter) runCLI(ctx context.Context, binPath, repoPath string, cfg *config.Config, discovery *orchestrator.DiscoveryResult) ([]orchestrator.Finding, error) {
 	if cfg.Offline {
-		return nil, fmt.Errorf("%w: osv-scanner needs the OSV advisory database in --offline mode", orchestrator.ErrSkipped)
+		findings, err := a.runNativeFallback(repoPath, cfg, discovery)
+		if err != nil {
+			return nil, err
+		}
+		return findings, fmt.Errorf("%w: offline mode; used embedded advisory list", orchestrator.ErrDegraded)
 	}
 
 	toolRes, err := adapters.RunTool(ctx, binPath, "--format", "json", "-r", repoPath)
 	if err != nil {
+		if isOSVNetworkError(err.Error()) {
+			return nil, err
+		}
 		return nil, fmt.Errorf("osv-scanner failed to execute: %w", err)
 	}
 
@@ -103,8 +170,19 @@ func (a *OSVAdapter) runCLI(ctx context.Context, binPath, repoPath string, cfg *
 
 	// 2+ is scanner runtime failure
 	if toolRes.ExitCode >= 2 {
+		logPath := adapters.LogEngineStderr(repoPath, "osv", toolRes.Stderr)
+		logSuffix := ""
+		if logPath != "" {
+			logSuffix = fmt.Sprintf(" (details: %s)", logPath)
+		}
 		errLine := strings.TrimSpace(string(toolRes.Stderr))
-		return nil, fmt.Errorf("osv-scanner exited with error %d: %s", toolRes.ExitCode, errLine)
+		if idx := strings.Index(errLine, "\n"); idx != -1 {
+			errLine = strings.TrimSpace(errLine[:idx])
+		}
+		if len(errLine) > 120 {
+			errLine = errLine[:117] + "..."
+		}
+		return nil, fmt.Errorf("osv-scanner exited with error %d: %s%s", toolRes.ExitCode, errLine, logSuffix)
 	}
 
 	return a.ParseOutput(toolRes.Stdout, repoPath, cfg)
@@ -178,8 +256,14 @@ func (a *OSVAdapter) ParseOutput(data []byte, repoPath string, cfg *config.Confi
 				sev := orchestrator.SeverityHigh
 				cvss := 7.5
 
-				// Check reachability with heuristic label
+				// Check reachability with honest label (P-13)
 				reachable := a.checkReachability(pkg.Package.Name, repoPath)
+				reachLevel := "unimported"
+				reachLabel := "[Reachability: unimported]"
+				if reachable {
+					reachLevel = "imported"
+					reachLabel = "[Reachability: imported]"
+				}
 
 				findingID := orchestrator.GenerateID("osv", cve, relFile, 1)
 				if cfg.ShouldIgnoreFinding(findingID) {
@@ -188,31 +272,32 @@ func (a *OSVAdapter) ParseOutput(data []byte, repoPath string, cfg *config.Confi
 
 				msg := vuln.Summary
 				if msg == "" {
-					msg = fmt.Sprintf("Vulnerable dependency %s@%s has advisory %s [Reachability: heuristic]", pkg.Package.Name, pkg.Package.Version, cve)
+					msg = fmt.Sprintf("Vulnerable dependency %s@%s has advisory %s %s", pkg.Package.Name, pkg.Package.Version, cve, reachLabel)
 				} else {
-					msg = fmt.Sprintf("%s [Reachability: heuristic]", msg)
+					msg = fmt.Sprintf("%s %s", msg, reachLabel)
 				}
 
 				snippet := fmt.Sprintf("%s@%s", pkg.Package.Name, pkg.Package.Version)
 				f := orchestrator.Finding{
-					ID:          findingID,
-					Source:      "osv",
-					Engine:      orchestrator.EngineExternal,
-					Category:    orchestrator.CategorySCA,
-					Rule:        cve,
-					Severity:    sev,
-					CVE:         cve,
-					CVSS:        cvss,
-					License:     pkgLicense,
-					File:        relFile,
-					LineStart:   1,
-					LineEnd:     1,
-					Message:     msg,
-					Snippet:     snippet,
-					OWASP:       "A06:2021-Vulnerable and Outdated Components",
-					Reachable:   &reachable,
-					FirstSeen:   time.Now().UTC(),
-					Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategorySCA, cve, relFile, snippet),
+					ID:                findingID,
+					Source:            "osv",
+					Engine:            orchestrator.EngineExternal,
+					Category:          orchestrator.CategorySCA,
+					Rule:              cve,
+					Severity:          sev,
+					CVE:               cve,
+					CVSS:              cvss,
+					License:           pkgLicense,
+					File:              relFile,
+					LineStart:         1,
+					LineEnd:           1,
+					Message:           msg,
+					Snippet:           snippet,
+					OWASP:             "A06:2021-Vulnerable and Outdated Components",
+					Reachable:         &reachable,
+					ReachabilityLevel: reachLevel,
+					FirstSeen:         time.Now().UTC(),
+					Fingerprint:       orchestrator.GenerateFingerprint(orchestrator.CategorySCA, cve, relFile, snippet),
 				}
 				f.RiskScore = orchestrator.CalculateRiskScore(&f)
 				f.FixSuggestion = orchestrator.GenerateRemediation(repoPath, &f)
@@ -515,30 +600,37 @@ func (a *OSVAdapter) runNativeFallback(repoPath string, cfg *config.Config, disc
 						checkRe := regexp.MustCompile(dbEntry.Vulnerable)
 						if checkRe.MatchString(ver) {
 							reachable := a.checkReachability(dbEntry.Package, repoPath)
+							reachLevel := "unimported"
+							reachLabel := "[Reachability: unimported]"
+							if reachable {
+								reachLevel = "imported"
+								reachLabel = "[Reachability: imported]"
+							}
 							findingID := orchestrator.GenerateID("osv", dbEntry.CVE, manifest, idx+1)
 							if cfg.ShouldIgnoreFinding(findingID) {
 								continue
 							}
 							snippet := fmt.Sprintf("%s@%s", dbEntry.Package, ver)
 							f := orchestrator.Finding{
-								ID:          findingID,
-								Source:      "osv",
-								Engine:      orchestrator.EngineEmbedded,
-								Category:    orchestrator.CategorySCA,
-								Rule:        dbEntry.CVE,
-								Severity:    dbEntry.Severity,
-								CVE:         dbEntry.CVE,
-								CVSS:        dbEntry.CVSS,
-								License:     dbEntry.License,
-								File:        manifest,
-								LineStart:   idx + 1,
-								LineEnd:     idx + 1,
-								Message:     fmt.Sprintf("%s (%s@%s) - Upgrade package to %s [Reachability: heuristic] [Embedded Lite Engine: install osv-scanner for full advisory coverage]", dbEntry.Description, dbEntry.Package, ver, dbEntry.FixedVer),
-								Snippet:     snippet,
-								OWASP:       "A06:2021-Vulnerable and Outdated Components",
-								Reachable:   &reachable,
-								FirstSeen:   time.Now().UTC(),
-								Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategorySCA, dbEntry.CVE, manifest, snippet),
+								ID:                findingID,
+								Source:            "osv",
+								Engine:            orchestrator.EngineEmbedded,
+								Category:          orchestrator.CategorySCA,
+								Rule:              dbEntry.CVE,
+								Severity:          dbEntry.Severity,
+								CVE:               dbEntry.CVE,
+								CVSS:              dbEntry.CVSS,
+								License:           dbEntry.License,
+								File:              manifest,
+								LineStart:         idx + 1,
+								LineEnd:           idx + 1,
+								Message:           fmt.Sprintf("%s (%s@%s) - Upgrade package to %s %s [Embedded Lite Engine: install osv-scanner for full advisory coverage]", dbEntry.Description, dbEntry.Package, ver, dbEntry.FixedVer, reachLabel),
+								Snippet:           snippet,
+								OWASP:             "A06:2021-Vulnerable and Outdated Components",
+								Reachable:         &reachable,
+								ReachabilityLevel: reachLevel,
+								FirstSeen:         time.Now().UTC(),
+								Fingerprint:       orchestrator.GenerateFingerprint(orchestrator.CategorySCA, dbEntry.CVE, manifest, snippet),
 							}
 							f.RiskScore = orchestrator.CalculateRiskScore(&f)
 							f.FixSuggestion = orchestrator.GenerateRemediation(repoPath, &f)
@@ -586,30 +678,37 @@ func (a *OSVAdapter) runNativeFallback(repoPath string, cfg *config.Config, disc
 						checkRe := regexp.MustCompile(dbEntry.Vulnerable)
 						if checkRe.MatchString(ver) {
 							reachable := a.checkReachability(dbEntry.Package, repoPath)
+							reachLevel := "unimported"
+							reachLabel := "[Reachability: unimported]"
+							if reachable {
+								reachLevel = "imported"
+								reachLabel = "[Reachability: imported]"
+							}
 							findingID := orchestrator.GenerateID("osv", dbEntry.CVE, manifest, idx+1)
 							if cfg.ShouldIgnoreFinding(findingID) {
 								continue
 							}
 							snippet := fmt.Sprintf("%s==%s", dbEntry.Package, ver)
 							f := orchestrator.Finding{
-								ID:          findingID,
-								Source:      "osv",
-								Engine:      orchestrator.EngineEmbedded,
-								Category:    orchestrator.CategorySCA,
-								Rule:        dbEntry.CVE,
-								Severity:    dbEntry.Severity,
-								CVE:         dbEntry.CVE,
-								CVSS:        dbEntry.CVSS,
-								License:     dbEntry.License,
-								File:        manifest,
-								LineStart:   idx + 1,
-								LineEnd:     idx + 1,
-								Message:     fmt.Sprintf("%s (%s==%s) - Upgrade package to %s [Reachability: heuristic] [Embedded Lite Engine: install osv-scanner for full advisory coverage]", dbEntry.Description, dbEntry.Package, ver, dbEntry.FixedVer),
-								Snippet:     snippet,
-								OWASP:       "A06:2021-Vulnerable and Outdated Components",
-								Reachable:   &reachable,
-								FirstSeen:   time.Now().UTC(),
-								Fingerprint: orchestrator.GenerateFingerprint(orchestrator.CategorySCA, dbEntry.CVE, manifest, snippet),
+								ID:                findingID,
+								Source:            "osv",
+								Engine:            orchestrator.EngineEmbedded,
+								Category:          orchestrator.CategorySCA,
+								Rule:              dbEntry.CVE,
+								Severity:          dbEntry.Severity,
+								CVE:               dbEntry.CVE,
+								CVSS:              dbEntry.CVSS,
+								License:           dbEntry.License,
+								File:              manifest,
+								LineStart:         idx + 1,
+								LineEnd:           idx + 1,
+								Message:           fmt.Sprintf("%s (%s==%s) - Upgrade package to %s %s [Embedded Lite Engine: install osv-scanner for full advisory coverage]", dbEntry.Description, dbEntry.Package, ver, dbEntry.FixedVer, reachLabel),
+								Snippet:           snippet,
+								OWASP:             "A06:2021-Vulnerable and Outdated Components",
+								Reachable:         &reachable,
+								ReachabilityLevel: reachLevel,
+								FirstSeen:         time.Now().UTC(),
+								Fingerprint:       orchestrator.GenerateFingerprint(orchestrator.CategorySCA, dbEntry.CVE, manifest, snippet),
 							}
 							f.RiskScore = orchestrator.CalculateRiskScore(&f)
 							f.FixSuggestion = orchestrator.GenerateRemediation(repoPath, &f)
@@ -635,13 +734,26 @@ func (a *OSVAdapter) checkReachability(pkgName, repoPath string) bool {
 		}
 		if info.IsDir() {
 			base := info.Name()
-			if base == "node_modules" || base == ".git" || base == "vendor" {
+			if base == "node_modules" || base == ".git" || base == "vendor" || base == "dist" || base == "build" {
 				return filepath.SkipDir
 			}
 			return nil
 		}
+
+		// P-13: Skip test files so reachability only reflects non-test application code
+		slashPath := filepath.ToSlash(strings.ToLower(path))
+		if strings.Contains(slashPath, "/test/") || strings.Contains(slashPath, "/tests/") ||
+			strings.Contains(slashPath, "/testdata/") ||
+			strings.HasSuffix(slashPath, "_test.go") ||
+			strings.HasSuffix(slashPath, ".test.js") || strings.HasSuffix(slashPath, ".spec.js") ||
+			strings.HasSuffix(slashPath, ".test.ts") || strings.HasSuffix(slashPath, ".spec.ts") ||
+			strings.HasPrefix(filepath.Base(slashPath), "test_") ||
+			strings.HasSuffix(slashPath, "_test.py") || strings.HasSuffix(slashPath, "test.py") {
+			return nil
+		}
+
 		ext := strings.ToLower(filepath.Ext(path))
-		if ext == ".js" || ext == ".ts" || ext == ".py" || ext == ".go" {
+		if ext == ".js" || ext == ".ts" || ext == ".py" || ext == ".go" || ext == ".java" {
 			data, err := os.ReadFile(path)
 			if err == nil && isPackageImported(pkgName, string(data), ext) {
 				found = true
@@ -666,6 +778,10 @@ func isPackageImported(pkgName, content, ext string) bool {
 	case ".go":
 		// import "pkg" or "github.com/.../pkg"
 		re := regexp.MustCompile(`(?m)["'](?:[a-zA-Z0-9_\-\.\/]+\/)?` + escaped + `["']`)
+		return re.MatchString(content)
+	case ".java":
+		// import pkg.*; import com.example.pkg; import static ...
+		re := regexp.MustCompile(`(?m)^\s*import\s+(?:static\s+)?[a-zA-Z0-9_\.]*\b` + escaped + `\b`)
 		return re.MatchString(content)
 	default:
 		return strings.Contains(content, pkgName)

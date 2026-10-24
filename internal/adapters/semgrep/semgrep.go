@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/adapters"
@@ -142,6 +143,36 @@ func confinedPath(root, rel string) (string, bool) {
 	return full, true
 }
 
+var (
+	warnedExtraRules = make(map[string]bool)
+	warnedExtraMu    sync.Mutex
+)
+
+// resolveExtraRule resolves extraRule checking cfg.ConfigDir, repoPath, and cwd.
+func resolveExtraRule(configDir, repoPath, extraRule string) (string, bool) {
+	candidates := []string{}
+	if filepath.IsAbs(extraRule) {
+		candidates = append(candidates, extraRule)
+	} else {
+		if configDir != "" {
+			candidates = append(candidates, filepath.Join(configDir, extraRule))
+		}
+		candidates = append(candidates, filepath.Join(repoPath, extraRule))
+		candidates = append(candidates, extraRule)
+	}
+
+	for _, cand := range candidates {
+		if fi, err := os.Stat(cand); err == nil && !fi.IsDir() {
+			abs, err := filepath.Abs(cand)
+			if err == nil {
+				return abs, true
+			}
+			return cand, true
+		}
+	}
+	return "", false
+}
+
 // registryReachable is a quick probe so an offline or firewalled run does not wait
 // for the full adapter timeout.
 func registryReachable() bool {
@@ -183,13 +214,31 @@ func (a *SemgrepAdapter) runCLI(ctx context.Context, binPath, repoPath string, c
 		}
 	}
 
+	if !cfg.Offline && len(cfg.Scanners.SAST.Packs) > 0 {
+		if registryReachable() {
+			for _, pack := range cfg.Scanners.SAST.Packs {
+				pack = strings.TrimSpace(pack)
+				if pack != "" {
+					args = append(args, "--config", pack)
+				}
+			}
+		} else {
+			fmt.Fprintln(os.Stderr, "semgrep: registry unreachable, skipping configured registry packs")
+		}
+	}
+
 	for _, extraRule := range cfg.Scanners.SAST.ExtraRules {
-		fullRulePath, ok := confinedPath(repoPath, extraRule)
+		resolvedPath, ok := resolveExtraRule(cfg.ConfigDir, repoPath, extraRule)
 		if !ok {
-			fmt.Fprintf(os.Stderr, "semgrep: ignoring extra rule %q (missing or outside the repository)\n", extraRule)
+			warnedExtraMu.Lock()
+			if !warnedExtraRules[extraRule] {
+				warnedExtraRules[extraRule] = true
+				fmt.Fprintf(os.Stderr, "semgrep: ignoring extra rule %q (missing or not found in config dir / repo)\n", extraRule)
+			}
+			warnedExtraMu.Unlock()
 			continue
 		}
-		args = append(args, "--config", fullRulePath)
+		args = append(args, "--config", resolvedPath)
 	}
 
 	args = append(args, repoPath)
@@ -201,11 +250,40 @@ func (a *SemgrepAdapter) runCLI(ctx context.Context, binPath, repoPath string, c
 
 	// Exit code 0 (clean) and exit code 1 (findings found) are standard. 2+ is a runtime error.
 	if toolRes.ExitCode >= 2 {
+		logPath := adapters.LogEngineStderr(repoPath, "semgrep", toolRes.Stderr)
+		logSuffix := ""
+		if logPath != "" {
+			logSuffix = fmt.Sprintf(" (details: %s)", logPath)
+		}
+
+		// P-02: If stdout parses as Semgrep JSON and contains results, return partial findings with ErrPartial
+		var rawReport semgrepOutput
+		if len(toolRes.Stdout) > 0 && json.Unmarshal(toolRes.Stdout, &rawReport) == nil && len(rawReport.Results) > 0 {
+			findings, pErr := ParseOutput(toolRes.Stdout, repoPath, cfg)
+			if pErr == nil && len(findings) > 0 {
+				var parseErrs []string
+				for _, e := range rawReport.Errors {
+					parseErrs = append(parseErrs, fmt.Sprintf("%s: %s", e.Path, e.Message))
+				}
+				errLine := strings.TrimSpace(string(toolRes.Stderr))
+				if idx := strings.Index(errLine, "\n"); idx != -1 {
+					errLine = strings.TrimSpace(errLine[:idx])
+				}
+				if errLine != "" {
+					parseErrs = append(parseErrs, errLine)
+				}
+				return findings, fmt.Errorf("%w: semgrep exit %d: %s%s", orchestrator.ErrPartial, toolRes.ExitCode, strings.Join(parseErrs, "; "), logSuffix)
+			}
+		}
+
 		errLine := strings.TrimSpace(string(toolRes.Stderr))
+		if idx := strings.Index(errLine, "\n"); idx != -1 {
+			errLine = strings.TrimSpace(errLine[:idx])
+		}
 		if len(errLine) > 120 {
 			errLine = errLine[:117] + "..."
 		}
-		return nil, fmt.Errorf("semgrep exited with error code %d: %s", toolRes.ExitCode, errLine)
+		return nil, fmt.Errorf("semgrep exited with error code %d: %s%s", toolRes.ExitCode, errLine, logSuffix)
 	}
 
 	var rawReport semgrepOutput
@@ -335,7 +413,7 @@ func (a *SemgrepAdapter) runNativeFallback(repoPath string, cfg *config.Config) 
 			Severity: orchestrator.SeverityHigh,
 			CWE:      "CWE-89",
 			Message:  "Potential SQL Injection: detected dynamic string concatenation or formatting inside database query call",
-			Pattern:  regexp.MustCompile(`(?i)(?:db\.(?:Query|Exec|QueryRow|Raw)|cursor\.execute)\s*\(\s*(?:fmt\.Sprintf|["'].*\+.*["']|` + "`" + `.*\$` + "`" + `)`),
+			Pattern:  regexp.MustCompile(`(?i)(?:const|let|var)?\s*[a-zA-Z0-9_]*(?:query|sql|q)\s*=\s*["'].*(?:SELECT|INSERT|UPDATE|DELETE).*\+|(?:db\.(?:Query|Exec|QueryRow|Raw|query|execute)|cursor\.execute)\s*\(\s*(?:fmt\.Sprintf|["'].*\+.*["']|` + "`" + `.*\$` + "`" + `)`),
 			Exts:     []string{".go", ".js", ".ts", ".py"},
 		},
 		{
@@ -343,7 +421,7 @@ func (a *SemgrepAdapter) runNativeFallback(repoPath string, cfg *config.Config) 
 			Severity: orchestrator.SeverityCritical,
 			CWE:      "CWE-78",
 			Message:  "Potential Command Injection: subprocess or shell execution invoked with unescaped variable",
-			Pattern:  regexp.MustCompile(`(?i)(?:exec\.Command|os\.system|child_process\.exec|subprocess\.Popen|subprocess\.call)\s*\([^"'\)]+`),
+			Pattern:  regexp.MustCompile(`(?i)(?:exec\.Command|os\.system|child_process\.exec|subprocess\.(?:Popen|call|run|check_output))\s*\([^"'\)]+|subprocess\.(?:Popen|call|run|check_output)\s*\(.*shell\s*=\s*True`),
 			Exts:     []string{".go", ".js", ".ts", ".py"},
 		},
 		{
@@ -367,8 +445,88 @@ func (a *SemgrepAdapter) runNativeFallback(repoPath string, cfg *config.Config) 
 			Severity: orchestrator.SeverityHigh,
 			CWE:      "CWE-22",
 			Message:  "Potential Path Traversal: user input directly used in filesystem path without filepath.Clean or boundary check",
-			Pattern:  regexp.MustCompile(`(?i)(?:os\.Open|ioutil\.ReadFile|fs\.readFile|open)\s*\(\s*(?:req\.|r\.URL|request\.|param|filename)`),
+			Pattern:  regexp.MustCompile(`(?i)(?:os\.Open|ioutil\.ReadFile|fs\.readFile|open)\s*\(\s*(?:req\.|r\.URL|request\.|param|filename|filepath\.Join\([^,]+,\s*[a-zA-Z0-9_]+\))`),
 			Exts:     []string{".go", ".js", ".ts", ".py"},
+		},
+		{
+			ID:       "sast-weak-crypto-md5-sha1",
+			Severity: orchestrator.SeverityHigh,
+			CWE:      "CWE-327",
+			Message:  "Use of broken or weak cryptographic hashing algorithm (MD5/SHA-1)",
+			Pattern:  regexp.MustCompile(`(?i)(?:crypto\.createHash\(\s*["'](?:md5|sha1)["']|md5\.New\(\)|hashlib\.(?:md5|sha1)\(\)|des\.NewCipher)`),
+			Exts:     []string{".go", ".js", ".ts", ".py"},
+		},
+		{
+			ID:       "sast-insecure-random",
+			Severity: orchestrator.SeverityMedium,
+			CWE:      "CWE-338",
+			Message:  "Use of cryptographically insecure pseudo-random number generator for security context",
+			Pattern:  regexp.MustCompile(`(?i)(?:rand\.Intn?\(|random\.random\(|Math\.random\(\))`),
+			Exts:     []string{".go", ".js", ".ts", ".py"},
+		},
+		{
+			ID:       "sast-jwt-none-algorithm",
+			Severity: orchestrator.SeverityCritical,
+			CWE:      "CWE-327",
+			Message:  "Insecure JWT configuration permitting 'none' algorithm disables signature verification",
+			Pattern:  regexp.MustCompile(`(?i)(?:algorithms\s*=\s*\[\s*["']none["']\s*\]|jwt\.SigningMethodNone|algorithm\s*:\s*["']none["']|Algorithm\.none\(\))`),
+			Exts:     []string{".go", ".js", ".ts", ".py"},
+		},
+		{
+			ID:       "sast-unsafe-deserialization",
+			Severity: orchestrator.SeverityCritical,
+			CWE:      "CWE-502",
+			Message:  "Unsafe object deserialization from untrusted data",
+			Pattern:  regexp.MustCompile(`(?i)(?:pickle\.loads?\(|yaml\.(?:unsafe_load|load\s*\([^,\)]+\)))`),
+			Exts:     []string{".py"},
+		},
+		{
+			ID:       "sast-open-redirect",
+			Severity: orchestrator.SeverityMedium,
+			CWE:      "CWE-601",
+			Message:  "Unvalidated open redirect to user-controlled URL",
+			Pattern:  regexp.MustCompile(`(?i)(?:res\.redirect\s*\(\s*req\.|http\.Redirect\s*\(.*r\.URL|redirect\s*\(\s*request\.)`),
+			Exts:     []string{".go", ".js", ".ts", ".py"},
+		},
+		{
+			ID:       "sast-ssrf",
+			Severity: orchestrator.SeverityHigh,
+			CWE:      "CWE-918",
+			Message:  "Server-Side Request Forgery: outbound HTTP request with user-controlled destination",
+			Pattern:  regexp.MustCompile(`(?i)(?:requests\.(?:get|post)\s*\(\s*request\.|axios\.(?:get|post)\s*\(\s*req\.|http\.Get\s*\(\s*r\.URL)`),
+			Exts:     []string{".go", ".js", ".ts", ".py"},
+		},
+		{
+			ID:       "sast-xss-innerhtml",
+			Severity: orchestrator.SeverityHigh,
+			CWE:      "CWE-79",
+			Message:  "Potential Cross-Site Scripting (XSS) via raw innerHTML assignment",
+			Pattern:  regexp.MustCompile(`(?i)(?:\.innerHTML\s*=\s*|dangerouslySetInnerHTML)`),
+			Exts:     []string{".js", ".ts"},
+		},
+		{
+			ID:       "sast-ssti",
+			Severity: orchestrator.SeverityHigh,
+			CWE:      "CWE-1336",
+			Message:  "Server-Side Template Injection: user input directly rendered in template engine",
+			Pattern:  regexp.MustCompile(`(?i)(?:render_template_string\s*\(|ejs\.render\s*\(|Template\([^)]+\)\.render\()`),
+			Exts:     []string{".js", ".ts", ".py"},
+		},
+		{
+			ID:       "sast-cors-wildcard",
+			Severity: orchestrator.SeverityMedium,
+			CWE:      "CWE-346",
+			Message:  "CORS policy combines wildcard origin with allowed credentials",
+			Pattern:  regexp.MustCompile(`(?i)(?:origin\s*:\s*["']\*["'].*credentials\s*:\s*true|credentials\s*:\s*true.*origin\s*:\s*["']\*["'])`),
+			Exts:     []string{".js", ".ts"},
+		},
+		{
+			ID:       "sast-xxe-processing",
+			Severity: orchestrator.SeverityHigh,
+			CWE:      "CWE-611",
+			Message:  "XML parser configured with external entity resolution allows XXE attacks",
+			Pattern:  regexp.MustCompile(`(?i)(?:XMLParser\s*\(.*resolve_entities\s*=\s*True|xml\.sax\.make_parser)`),
+			Exts:     []string{".py"},
 		},
 	}
 

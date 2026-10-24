@@ -11,6 +11,9 @@ def test_py(cursor, user_input):
     # ruleid: org-python-sql-injection-format
     cursor.execute(f"SELECT * FROM users WHERE id = {user_input}")
 
+    # ok: org-python-sql-injection-format
+    cursor.execute("SELECT * FROM users WHERE id = %s", (user_input,))
+
     # ruleid: org-python-command-injection-shell
     subprocess.run(user_input, shell=True)
 
@@ -46,4 +49,10 @@ def test_py(cursor, user_input):
 
     # ruleid: org-python-ssti-jinja2
     render_template_string(user_input)
+
+    # ruleid: org-jwt-none-algorithm-python
+    jwt.decode(token, key, algorithms=["none"])
+
+    # ok: org-jwt-none-algorithm-python
+    jwt.decode(token, key, algorithms=["HS256"])
 

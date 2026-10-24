@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.2] - 2026-10-25
+
+### Fixed
+- **Semgrep SAST Rule Parsing & Cross-Language Grammar (N-1)**:
+  - Split `org-jwt-none-algorithm` into `org-jwt-none-algorithm` (Go, Java, JS, TS) and `org-jwt-none-algorithm-python` (Python). Isolated Python-specific keyword argument syntax (`algorithms=["none"]`) to resolve Semgrep grammar parser failure and exit code 2 crash on multi-language configs.
+  - Added test case and ok test fixture to `rules/tests/test_rules.py`. Total embedded rules count increased to 66.
+- **PR-Flow Synthetic Token Detection (N-3)**:
+  - Replaced low-entropy sequential token in `scripts/pr-flow.sh` with Shannon-entropy verified test token `R8kD3mZq1Xv7LpN2sT9wYb4HcF6jGa0UeQ5o`, ensuring consistent detection by production Gitleaks entropy filters.
+- **Docker Download Cryptographic Verification (N-6)**:
+  - Added `COPY plugins/checksums.txt /opt/checksums.txt` and pre-extraction SHA-256 integrity verification (`sha256sum -c`) for Gitleaks, OSV-Scanner, Trivy, and Nuclei in both `Dockerfile` and `deploy/docker/Dockerfile.cli`.
+- **Single Source of Truth for Versioning (N-5)**:
+  - Introduced root `VERSION` file (`1.0.2`).
+  - Added integration test `cmd/sentinel/version_test.go` asserting version synchronization across CLI, container images, Homebrew formula, GitHub Action, and VS Code extension.
+- **CI Test Suite Coverage (N-2)**:
+  - Added CI validation steps in `.github/workflows/ci.yml` ensuring real Semgrep rule pack loading, `sentinel rules test --semgrep`, PR gating simulation, and the full acceptance suite run on every commit and pull request.
+- **Native CycloneDX 1.5 SBOM Fallback**:
+  - Added native CycloneDX 1.5 JSON SBOM generation to `internal/adapters/trivy/trivy.go` to provide zero-dependency SBOM exports when external Trivy is unavailable.
+
+---
+
 ## [1.0.1] - 2026-10-24
 
 ### Fixed

@@ -7,9 +7,9 @@ import (
 )
 
 var (
-	version = "1.0.1"
+	version = "1.0.2"
 	commit  = "none"
-	date    = "2026-10-24"
+	date    = "2026-10-25"
 )
 
 func main() {
@@ -53,6 +53,7 @@ scoring contextual risk, and suggesting actionable fixes without leaking source 
 	rootCmd.AddCommand(newConfigCmd())
 	rootCmd.AddCommand(newRulesCmd())
 	rootCmd.AddCommand(newCompletionCmd())
+	rootCmd.AddCommand(newBenchDetectCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(2)

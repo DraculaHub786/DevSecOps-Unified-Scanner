@@ -14,8 +14,10 @@ RUN go mod download
 
 COPY . .
 
+ARG VERSION=1.0.2
+
 # Compile sentinel CLI and sentinel-agent daemon with stripped debug symbols
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X main.version=1.0.1" -o /bin/sentinel ./cmd/sentinel && \
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /bin/sentinel ./cmd/sentinel && \
     CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /bin/sentinel-agent ./cmd/sentinel-agent
 
 # Install pinned govulncheck for Go reachability analysis
@@ -24,9 +26,11 @@ RUN CGO_ENABLED=0 go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
 # Stage 2: Hardened Runtime Environment
 FROM alpine:3.20.3
 
+ARG VERSION=1.0.2
+
 LABEL org.opencontainers.image.title="Sentinel DevSecOps Unified Scanner" \
       org.opencontainers.image.description="Unified SAST, SCA, secrets, IaC, and resilience security scanner" \
-      org.opencontainers.image.version="1.0.1" \
+      org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.authors="DraculaHub786" \
       org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.source="https://github.com/DraculaHub786/DevSecOps-Unified-Scanner"
@@ -55,30 +59,43 @@ RUN python3 -m venv /opt/venv && \
     /opt/venv/bin/pip install --no-cache-dir --upgrade pip && \
     /opt/venv/bin/pip install --no-cache-dir "semgrep==${SEMGREP_VERSION}"
 
-# Install Gitleaks
-RUN TMP_DIR=$(mktemp -d) && \
-    curl -fsSL -o "$TMP_DIR/gitleaks.tar.gz" "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" && \
-    tar -xzf "$TMP_DIR/gitleaks.tar.gz" -C /usr/local/bin gitleaks && \
-    chmod 0755 /usr/local/bin/gitleaks && \
-    rm -rf "$TMP_DIR"
+# Copy checksums for cryptographic verification of downloads
+COPY plugins/checksums.txt /opt/checksums.txt
 
-# Install OSV-Scanner
-RUN curl -fsSL -o /usr/local/bin/osv-scanner "https://github.com/google/osv-scanner/releases/download/v${OSV_VERSION}/osv-scanner_linux_amd64" && \
+# Install Gitleaks with SHA-256 integrity verification
+RUN set -eu; \
+    f="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"; \
+    curl -fsSL -o "/tmp/$f" "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/$f"; \
+    grep -F "  $f" /opt/checksums.txt | sed "s#  $f#  /tmp/$f#" | sha256sum -c -; \
+    tar -xzf "/tmp/$f" -C /usr/local/bin gitleaks; \
+    chmod 0755 /usr/local/bin/gitleaks; \
+    rm -f "/tmp/$f"
+
+# Install OSV-Scanner with SHA-256 integrity verification
+RUN set -eu; \
+    f="osv-scanner_linux_amd64"; \
+    curl -fsSL -o "/tmp/$f" "https://github.com/google/osv-scanner/releases/download/v${OSV_VERSION}/$f"; \
+    grep -F "  $f" /opt/checksums.txt | sed "s#  $f#  /tmp/$f#" | sha256sum -c -; \
+    mv "/tmp/$f" /usr/local/bin/osv-scanner; \
     chmod 0755 /usr/local/bin/osv-scanner
 
-# Install Trivy
-RUN TMP_DIR=$(mktemp -d) && \
-    curl -fsSL -o "$TMP_DIR/trivy.tar.gz" "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" && \
-    tar -xzf "$TMP_DIR/trivy.tar.gz" -C /usr/local/bin trivy && \
-    chmod 0755 /usr/local/bin/trivy && \
-    rm -rf "$TMP_DIR"
+# Install Trivy with SHA-256 integrity verification
+RUN set -eu; \
+    f="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"; \
+    curl -fsSL -o "/tmp/$f" "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/$f"; \
+    grep -F "  $f" /opt/checksums.txt | sed "s#  $f#  /tmp/$f#" | sha256sum -c -; \
+    tar -xzf "/tmp/$f" -C /usr/local/bin trivy; \
+    chmod 0755 /usr/local/bin/trivy; \
+    rm -f "/tmp/$f"
 
-# Install Nuclei
-RUN TMP_DIR=$(mktemp -d) && \
-    curl -fsSL -o "$TMP_DIR/nuclei.zip" "https://github.com/projectdiscovery/nuclei/releases/download/v${NUCLEI_VERSION}/nuclei_${NUCLEI_VERSION}_linux_amd64.zip" && \
-    unzip -qo "$TMP_DIR/nuclei.zip" -d /usr/local/bin nuclei && \
-    chmod 0755 /usr/local/bin/nuclei && \
-    rm -rf "$TMP_DIR"
+# Install Nuclei with SHA-256 integrity verification
+RUN set -eu; \
+    f="nuclei_${NUCLEI_VERSION}_linux_amd64.zip"; \
+    curl -fsSL -o "/tmp/$f" "https://github.com/projectdiscovery/nuclei/releases/download/v${NUCLEI_VERSION}/$f"; \
+    grep -F "  $f" /opt/checksums.txt | sed "s#  $f#  /tmp/$f#" | sha256sum -c -; \
+    unzip -qo "/tmp/$f" -d /usr/local/bin nuclei; \
+    chmod 0755 /usr/local/bin/nuclei; \
+    rm -f "/tmp/$f"
 
 # Copy compiled Sentinel binaries and govulncheck from builder
 COPY --from=builder /bin/sentinel /usr/local/bin/sentinel
