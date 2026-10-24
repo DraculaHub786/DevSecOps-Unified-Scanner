@@ -145,11 +145,11 @@ npm install
 npm test
 npm run package
 ```
-This generates `sentinel-vscode-1.0.0.vsix`.
+This generates `sentinel-vscode-1.0.1.vsix`.
 
 ### Installing into VS Code
 ```bash
-code --install-extension sentinel-vscode-1.0.0.vsix
+code --install-extension sentinel-vscode-1.0.1.vsix
 ```
 
 ---

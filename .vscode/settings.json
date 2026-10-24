@@ -1,0 +1,15 @@
+{
+  "files.associations": {
+    "**/testdata/hostile/malformed/*.json": "plaintext",
+    "**/testdata/hostile/malformed/*.yml": "plaintext",
+    "**/testdata/hostile/malformed/.*.yml": "plaintext",
+    "**/testdata/hostile/malformed/.sentinel.yml": "plaintext"
+  },
+  "files.watcherExclude": {
+    "**/testdata/**": true,
+    "**/rules/tests/**": true
+  },
+  "search.exclude": {
+    "**/testdata/hostile/malformed/**": true
+  }
+}
