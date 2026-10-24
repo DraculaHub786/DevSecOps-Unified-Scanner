@@ -24,7 +24,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X main.version=
 RUN CGO_ENABLED=0 go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
 
 # Stage 2: Hardened Runtime Environment
-FROM alpine:3.20.3
+FROM alpine:3.24.2
 
 ARG VERSION=1.0.2
 
