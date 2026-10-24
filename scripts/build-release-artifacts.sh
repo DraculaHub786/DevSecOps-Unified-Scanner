@@ -48,7 +48,15 @@ for target in "${TARGETS[@]}"; do
 
   cd "${DIST_DIR}"
   if [ "${GOOS}" = "windows" ]; then
-    zip -q -r "${ARCHIVE_NAME}.zip" "${ARCHIVE_NAME}"
+    if command -v zip >/dev/null 2>&1; then
+      zip -q -r "${ARCHIVE_NAME}.zip" "${ARCHIVE_NAME}"
+    elif command -v python >/dev/null 2>&1; then
+      python -m zipfile -c "${ARCHIVE_NAME}.zip" "${ARCHIVE_NAME}"
+    elif command -v powershell.exe >/dev/null 2>&1; then
+      powershell.exe -NoProfile -Command "Compress-Archive -Path '${ARCHIVE_NAME}/*' -DestinationPath '${ARCHIVE_NAME}.zip' -Force"
+    else
+      tar -czf "${ARCHIVE_NAME}.tar.gz" "${ARCHIVE_NAME}"
+    fi
   else
     tar -czf "${ARCHIVE_NAME}.tar.gz" "${ARCHIVE_NAME}"
   fi

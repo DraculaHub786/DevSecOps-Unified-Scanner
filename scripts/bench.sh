@@ -51,4 +51,9 @@ echo "   Incremental Scan Time: ${INC_DURATION_MS} ms"
 
 # 4. Compare and Deduplication Verification
 echo ""
-python3 "${SCRIPT_DIR}/compare.py" "${OUTPUT_DIR}/cold.json"
+PYTHON_BIN="python3"
+if ! "${PYTHON_BIN}" --version &>/dev/null; then
+  PYTHON_BIN="python"
+fi
+"${PYTHON_BIN}" "${SCRIPT_DIR}/compare.py" "${OUTPUT_DIR}/cold.json"
+
