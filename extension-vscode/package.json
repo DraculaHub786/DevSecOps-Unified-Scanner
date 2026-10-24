@@ -242,6 +242,6 @@
     "@types/vscode": "^1.80.0",
     "@vscode/test-electron": "^3.1.0",
     "@vscode/vsce": "2.24.0",
-    "typescript": "^5.3.3"
+    "typescript": "^7.0.2"
   }
 }
