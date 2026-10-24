@@ -509,33 +509,210 @@ func ScanImage(ctx context.Context, imageName string) ([]orchestrator.Finding, e
 
 // GenerateSBOM outputs a software bill of materials in CycloneDX or SPDX format.
 func GenerateSBOM(ctx context.Context, repoPath, format, outputPath string) error {
-	binPath, err := exec.LookPath("trivy")
-	if err != nil || binPath == "" {
-		return fmt.Errorf("trivy is required for SBOM generation (install trivy)")
-	}
-
 	if format == "" {
 		format = "cyclonedx"
 	}
 
-	args := []string{"fs", "--format", format}
-	if outputPath != "" {
-		args = append(args, "--output", outputPath)
-	}
-	args = append(args, repoPath)
+	binPath, err := exec.LookPath("trivy")
+	if err == nil && binPath != "" {
+		args := []string{"fs", "--format", format}
+		if outputPath != "" {
+			args = append(args, "--output", outputPath)
+		}
+		args = append(args, repoPath)
 
-	toolRes, err := adapters.RunTool(ctx, binPath, args...)
-	if err != nil {
-		return fmt.Errorf("SBOM generation failed: %w", err)
+		toolRes, err := adapters.RunTool(ctx, binPath, args...)
+		if err == nil && toolRes.ExitCode == 0 {
+			if outputPath == "" {
+				fmt.Println(string(toolRes.Stdout))
+			} else {
+				fmt.Printf("✅ SBOM successfully generated in %s format: %s\n", format, outputPath)
+			}
+			return nil
+		}
 	}
-	if toolRes.ExitCode != 0 {
-		return fmt.Errorf("trivy sbom error (exit %d): %s", toolRes.ExitCode, string(toolRes.Stderr))
+
+	// Native embedded fallback when external Trivy is not installed or unavailable
+	return generateNativeSBOM(repoPath, format, outputPath)
+}
+
+type cdxMetadata struct {
+	Timestamp string       `json:"timestamp"`
+	Tools     []cdxTool    `json:"tools"`
+	Component cdxComponent `json:"component"`
+}
+
+type cdxTool struct {
+	Vendor  string `json:"vendor"`
+	Name    string `json:"name"`
+	Version string `json:"version"`
+}
+
+type cdxComponent struct {
+	Type    string `json:"type"`
+	Name    string `json:"name"`
+	Version string `json:"version,omitempty"`
+	PURL    string `json:"purl,omitempty"`
+}
+
+type cdxBOM struct {
+	BOMFormat   string         `json:"bomFormat"`
+	SpecVersion string         `json:"specVersion"`
+	Version     int            `json:"version"`
+	Metadata    cdxMetadata    `json:"metadata"`
+	Components  []cdxComponent `json:"components"`
+}
+
+func generateNativeSBOM(repoPath, format, outputPath string) error {
+	var components []cdxComponent
+	seen := make(map[string]bool)
+
+	_ = filepath.Walk(repoPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil
+		}
+		base := info.Name()
+		if base == "package.json" {
+			data, err := os.ReadFile(path)
+			if err == nil {
+				var pkg struct {
+					Dependencies    map[string]string `json:"dependencies"`
+					DevDependencies map[string]string `json:"devDependencies"`
+				}
+				if json.Unmarshal(data, &pkg) == nil {
+					for dep, ver := range pkg.Dependencies {
+						ver = strings.TrimPrefix(ver, "^")
+						ver = strings.TrimPrefix(ver, "~")
+						key := "npm:" + dep + "@" + ver
+						if !seen[key] {
+							seen[key] = true
+							components = append(components, cdxComponent{
+								Type:    "library",
+								Name:    dep,
+								Version: ver,
+								PURL:    fmt.Sprintf("pkg:npm/%s@%s", dep, ver),
+							})
+						}
+					}
+					for dep, ver := range pkg.DevDependencies {
+						ver = strings.TrimPrefix(ver, "^")
+						ver = strings.TrimPrefix(ver, "~")
+						key := "npm:" + dep + "@" + ver
+						if !seen[key] {
+							seen[key] = true
+							components = append(components, cdxComponent{
+								Type:    "library",
+								Name:    dep,
+								Version: ver,
+								PURL:    fmt.Sprintf("pkg:npm/%s@%s", dep, ver),
+							})
+						}
+					}
+				}
+			}
+		} else if base == "requirements.txt" {
+			f, err := os.Open(path)
+			if err == nil {
+				sc := bufio.NewScanner(f)
+				for sc.Scan() {
+					line := strings.TrimSpace(sc.Text())
+					if line == "" || strings.HasPrefix(line, "#") {
+						continue
+					}
+					parts := strings.Split(line, "==")
+					if len(parts) == 2 {
+						pkgName := strings.TrimSpace(parts[0])
+						pkgVer := strings.TrimSpace(parts[1])
+						key := "pypi:" + pkgName + "@" + pkgVer
+						if !seen[key] {
+							seen[key] = true
+							components = append(components, cdxComponent{
+								Type:    "library",
+								Name:    pkgName,
+								Version: pkgVer,
+								PURL:    fmt.Sprintf("pkg:pypi/%s@%s", pkgName, pkgVer),
+							})
+						}
+					}
+				}
+				_ = sc.Err()
+				f.Close()
+			}
+		} else if base == "go.mod" {
+			f, err := os.Open(path)
+			if err == nil {
+				sc := bufio.NewScanner(f)
+				inRequire := false
+				for sc.Scan() {
+					line := strings.TrimSpace(sc.Text())
+					if strings.HasPrefix(line, "require (") {
+						inRequire = true
+						continue
+					}
+					if inRequire && line == ")" {
+						inRequire = false
+						continue
+					}
+					if inRequire || strings.HasPrefix(line, "require ") {
+						trimmed := strings.TrimPrefix(line, "require ")
+						fields := strings.Fields(trimmed)
+						if len(fields) >= 2 {
+							mod := fields[0]
+							ver := fields[1]
+							key := "golang:" + mod + "@" + ver
+							if !seen[key] {
+								seen[key] = true
+								components = append(components, cdxComponent{
+									Type:    "library",
+									Name:    mod,
+									Version: ver,
+									PURL:    fmt.Sprintf("pkg:golang/%s@%s", mod, ver),
+								})
+							}
+						}
+					}
+				}
+				_ = sc.Err()
+				f.Close()
+			}
+		}
+		return nil
+	})
+
+	repoBase := filepath.Base(repoPath)
+	bom := cdxBOM{
+		BOMFormat:   "CycloneDX",
+		SpecVersion: "1.5",
+		Version:     1,
+		Metadata: cdxMetadata{
+			Timestamp: time.Now().UTC().Format(time.RFC3339),
+			Tools: []cdxTool{
+				{
+					Vendor:  "Sentinel",
+					Name:    "sentinel-lite-sbom",
+					Version: "1.0.1",
+				},
+			},
+			Component: cdxComponent{
+				Type: "application",
+				Name: repoBase,
+			},
+		},
+		Components: components,
+	}
+
+	data, err := json.MarshalIndent(bom, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to encode CycloneDX SBOM: %w", err)
 	}
 
 	if outputPath == "" {
-		fmt.Println(string(toolRes.Stdout))
+		fmt.Println(string(data))
 	} else {
-		fmt.Printf("✅ SBOM successfully generated in %s format: %s\n", format, outputPath)
+		if err := os.WriteFile(outputPath, data, 0644); err != nil {
+			return fmt.Errorf("failed to write SBOM output to %s: %w", outputPath, err)
+		}
+		fmt.Printf("✅ SBOM successfully generated in CycloneDX format (lite engine): %s\n", outputPath)
 	}
 
 	return nil
