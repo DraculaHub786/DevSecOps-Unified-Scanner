@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/adapters"
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/config"
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/orchestrator"
 )
@@ -216,7 +217,11 @@ func ParseGovulncheckOutput(data []byte, repoPath string, cfg *config.Config) ([
 }
 
 func (a *GovulncheckAdapter) Run(ctx context.Context, repoPath string, cfg *config.Config, discovery *orchestrator.DiscoveryResult) ([]orchestrator.Finding, error) {
-	binPath, err := exec.LookPath("govulncheck")
+	if cfg != nil && (cfg.Engine == "embedded" || cfg.Offline) {
+		return nil, fmt.Errorf("%w: govulncheck skipped in embedded/offline mode", orchestrator.ErrSkipped)
+	}
+
+	binPath, err := adapters.FindToolBinary("govulncheck")
 	if err != nil || binPath == "" {
 		return nil, fmt.Errorf("%w: govulncheck binary not found in PATH", orchestrator.ErrSkipped)
 	}

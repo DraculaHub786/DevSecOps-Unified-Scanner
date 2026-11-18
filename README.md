@@ -243,15 +243,35 @@ go test -v ./cmd/sentinel -run TestBenchmarkScansTimingAndAccuracy
 
 ---
 
-## 🎯 Detection Accuracy & Quality (Benchmark Corpus)
+## 🎯 Detection Accuracy (measured, real engines)
 
-Evaluated continuously against `testdata/benchmark` ground-truth corpus via `sentinel bench-detect`:
+Measured with `sentinel bench-detect` against `testdata/benchmark` — 21 labelled findings
+across **Go, JavaScript, Python, PHP, Ruby and Java** — using the real external engines,
+not the lite fallback:
 
 | Category | True Positives | False Positives | False Negatives | Precision | Recall | F1-Score |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
 | **Secrets** | 2 | 0 | 0 | **100.0%** | **100.0%** | **1.000** |
-| **SAST** | 4 | 0 | 0 | **100.0%** | **100.0%** | **1.000** |
-| **OVERALL** | 6 | 0 | 0 | **100.0%** | **100.0%** | **1.000** |
+| **SAST** | 16 | 1 | 3 | **94.1%** | **84.2%** | **0.889** |
+| **OVERALL** | 18 | 1 | 3 | **94.7%** | **85.7%** | **0.900** |
+
+> [!IMPORTANT]
+> **Read this honestly.** 21 labelled findings is a regression baseline, not a
+> field benchmark. It is large enough to catch real defects — it already did: it exposed a
+> rule that could never fire (`pattern: $K = "AKIA[0-9A-Z]{16}"` is a *literal* in Semgrep,
+> not a regex) and three genuine detection gaps. It is **not** large enough to claim
+> real-world precision/recall. Every number above is reproducible:
+> `sentinel bench-detect`.
+
+Known detection gaps the corpus records (tracked, not hidden):
+
+| Missed rule | Why |
+| :--- | :--- |
+| `sast-path-traversal` | Go rule keys on `filepath.Join`, not a bare `os.ReadFile(userInput)` |
+| `org-ruby-sql-injection` | Semgrep's Ruby matcher does not match this concatenation position |
+| `org-java-unsafe-object-input-stream` | Rule expects `new ObjectInputStream(x).readObject()` on one line |
+
+Run it against the lite fallback instead with `sentinel bench-detect --embedded`.
 
 ---
 
@@ -259,13 +279,13 @@ Evaluated continuously against `testdata/benchmark` ground-truth corpus via `sen
 
 1. **Lite Mode Fallback Scope**: Embedded lite mode uses zero-dependency regex engines designed for rapid pre-commit checks. It does not perform full inter-procedural taint tracking or deep symbolic execution; external tools (`Semgrep`, `Trivy`) are required for complete AST coverage.
 2. **Reachability Analysis Depth**: Call-graph execution traces (`proven`) are currently available for Go via `govulncheck`. For JavaScript, TypeScript, Python, and Java, Sentinel provides import-graph AST analysis (`imported` vs `unimported`), excluding test fixtures.
-3. **Language Matrix**: Bundled first-party rules cover Go, JavaScript, TypeScript, Python, Java, Dockerfiles, and GitHub Actions workflows. Additional languages can be enabled via Semgrep registry packs in `.sentinel.yml`.
+3. **Language Matrix**: Bundled first-party rules cover Go, JavaScript, TypeScript, Python, Java, PHP, C#, Ruby, Dockerfiles, and GitHub Actions workflows. Additional languages can be enabled via Semgrep registry packs in `.sentinel.yml`.
 4. **Passive DAST Only**: Web application testing with Nuclei is strictly passive (`-passive`) to eliminate risk of denial-of-service or database mutation. Active penetration testing requires dedicated tooling.
+5. **`--offline` degrades SCA**: Without network access, known-vulnerable-dependency scanning falls back to a bundled advisory list and is reported as `DEGRADED`, not `RAN`. In `--ci` this is permitted only when `--offline` is passed explicitly; a network failure without `--offline` exits `2` so a truncated advisory list can never silently green a pipeline.
+6. **Still to come**: AI-assisted remediation (Phase 5), VS Code integration tests on real editors (Phase 6), and signed releases with SLSA provenance (Phase 7). See [`docs/IMPLEMENTATION-PLAN.md`](docs/IMPLEMENTATION-PLAN.md).
 
 ---
 
 ## 📄 License
 
 Apache License 2.0. See [LICENSE](LICENSE) for full details.
-
-

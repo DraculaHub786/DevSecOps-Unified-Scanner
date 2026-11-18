@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -105,6 +104,14 @@ func (a *OSVAdapter) Run(ctx context.Context, repoPath string, cfg *config.Confi
 		return nil, nil
 	}
 
+	if cfg.Engine == "embedded" {
+		findings, fallbackErr := a.runNativeFallback(repoPath, cfg, discovery)
+		if fallbackErr != nil {
+			return nil, fallbackErr
+		}
+		return findings, nil
+	}
+
 	// P-09: In offline mode, degrade to embedded advisory list
 	if cfg.Offline {
 		findings, fallbackErr := a.runNativeFallback(repoPath, cfg, discovery)
@@ -114,7 +121,7 @@ func (a *OSVAdapter) Run(ctx context.Context, repoPath string, cfg *config.Confi
 		return findings, fmt.Errorf("%w: offline mode; used embedded advisory list", orchestrator.ErrDegraded)
 	}
 
-	binPath, err := exec.LookPath("osv-scanner")
+	binPath, err := adapters.FindToolBinary("osv-scanner")
 	if err != nil || binPath == "" {
 		if cfg.Engine == "external" {
 			return nil, fmt.Errorf("osv-scanner executable not found in PATH and engine is configured as 'external'")

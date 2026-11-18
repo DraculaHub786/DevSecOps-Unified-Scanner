@@ -100,4 +100,3 @@ func TestReachabilityRiskScoreTiers(t *testing.T) {
 		t.Errorf("expected proven risk score (%.1f) > imported risk score (%.1f)", scoreProven, scoreImported)
 	}
 }
-

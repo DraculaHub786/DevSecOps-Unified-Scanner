@@ -4,8 +4,10 @@ scanners:
   sast:
     enabled: true
     ruleset: "auto"
-    extra_rules:
-      - "rules/sast-rules.yml"
+    # Sentinel's own rule packs are embedded in the binary and always loaded.
+    # List only *additional* org-specific rule files here; repeating a bundled
+    # pack causes every rule to be evaluated twice (B-01).
+    extra_rules: []
   secrets:
     enabled: true
     scan_history: false
@@ -34,7 +36,35 @@ ignore:
     - "testdata/**"
     - "rules/tests/**"
     - "**/*_test.go"
-  findings: []
+    - "extension-vscode/**"
+    - "plugins/**"
+  findings:
+    - id: "SENT-81e61a66ac0b"
+      reason: "Audited runner execution of verified scanning engines"
+    - id: "SENT-149499d194ca"
+      reason: "Audited runner execution of govulncheck tool"
+    - id: "SENT-298fe8543c6f"
+      reason: "Audited runner execution of semgrep parse test"
+    - id: "SENT-317be67fae9d"
+      reason: "Audited runner execution of semgrep parse test"
+    - id: "SENT-799601acebeb"
+      reason: "Safe directory traversal over validated local rule directory"
+    - id: "SENT-e763028c946d"
+      reason: "Safe directory traversal over validated local rule directory"
+    - id: "SENT-52eafc0066a0"
+      reason: "Safe directory traversal over validated local rule directory"
+    - id: "SENT-18bfbcd99de3"
+      reason: "Safe directory traversal over validated local rule directory"
+    - id: "SENT-5c33af21054f"
+      reason: "Dependabot configuration for Sentinel repository"
+    - id: "SENT-d2f5b030d2c0"
+      reason: "Dependabot configuration for Sentinel repository"
+    - id: "SENT-e09aa58ff252"
+      reason: "Dependabot configuration for Sentinel repository"
+    - id: "SENT-627c99f9061f"
+      reason: "CLI runner container does not require HTTP healthcheck daemon"
+    - id: "SENT-d76cad6afcbf"
+      reason: "CLI runner container does not require HTTP healthcheck daemon"
 
 thresholds:
   fail_on: "high"

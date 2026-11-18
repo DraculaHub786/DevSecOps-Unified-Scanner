@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -49,6 +51,12 @@ type ScanOptions struct {
 	Timeout        time.Duration
 	CI             bool
 	AllowLite      bool
+	// GuardMode marks a pre-commit/pre-push gate. Guard runs on developer machines that
+	// may have no external engines at all, so an embedded result is legitimate there
+	// rather than the hard failure that --ci treats it as.
+	GuardMode bool
+	// OnProgress is an optional callback notifying live progress observers (e.g. dynamic TUI HUD).
+	OnProgress func(stage string, detail string)
 }
 
 // ScanResult aggregates the final correlated output of a scan.
@@ -99,6 +107,9 @@ func (s *Scheduler) Execute(ctx context.Context, cfg *config.Config, opts ScanOp
 	defer cancel()
 
 	// 1. Discover
+	if opts.OnProgress != nil {
+		opts.OnProgress("discovery", "Traversing AST dependency graph...")
+	}
 	discovery, err := Discover(opts.RepoPath)
 	if err != nil {
 		return nil, fmt.Errorf("discovery phase failed: %w", err)
@@ -142,6 +153,11 @@ func (s *Scheduler) Execute(ctx context.Context, cfg *config.Config, opts ScanOp
 		adapterErrs []string
 		enginesUsed = make(map[string]string)
 		coverageMap = make(map[string]CoverageLine)
+		// degradedEngines records adapters that ran with an embedded advisory list
+		// because the network was unavailable, as opposed to a missing external binary.
+		// Degradation is reported per category but must not flip the whole run to "lite"
+		// or fail the CI lite gate (B-03 / B-05).
+		degradedEngines = make(map[string]bool)
 	)
 
 	for _, adapter := range applicable {
@@ -167,7 +183,14 @@ func (s *Scheduler) Execute(ctx context.Context, cfg *config.Config, opts ScanOp
 			adCtx, adCancel := context.WithTimeout(scanCtx, 60*time.Second)
 			defer adCancel()
 
+			if opts.OnProgress != nil {
+				opts.OnProgress("engine_start", ad.Name())
+			}
+
 			res, err := ad.Run(adCtx, opts.RepoPath, cfg, discovery)
+			if opts.OnProgress != nil {
+				opts.OnProgress("engine_done", fmt.Sprintf("%s (%d findings)", ad.Name(), len(res)))
+			}
 			mu.Lock()
 			defer mu.Unlock()
 
@@ -201,13 +224,18 @@ func (s *Scheduler) Execute(ctx context.Context, cfg *config.Config, opts ScanOp
 				if errors.Is(err, ErrDegraded) {
 					msg := fmt.Sprintf("Adapter %s degraded: %v", ad.Name(), err)
 					warnings = append(warnings, msg)
+					detail := "network unreachable (used embedded advisory list)"
+					if cfg != nil && cfg.Offline {
+						detail = "offline mode (used embedded advisory list)"
+					}
 					coverageMap[ad.Category()] = CoverageLine{
 						Category: ad.Category(),
 						Engine:   EngineEmbedded,
 						Status:   "degraded",
-						Detail:   "network unreachable (used embedded advisory list)",
+						Detail:   detail,
 					}
 					enginesUsed[ad.Name()] = EngineEmbedded
+					degradedEngines[ad.Name()] = true
 					allFindings = append(allFindings, res...)
 					return
 				}
@@ -249,16 +277,23 @@ func (s *Scheduler) Execute(ctx context.Context, cfg *config.Config, opts ScanOp
 					"nuclei":   "nuclei",
 				}
 				if bin, ok := binMap[ad.Name()]; ok {
-					if _, err := exec.LookPath(bin); err != nil {
+					if _, err := findToolBinary(bin); err != nil {
 						engine = EngineEmbedded
 					}
 				}
 			}
 			enginesUsed[ad.Name()] = engine
+			detail := ""
+			// P-06: lite-mode SAST is a narrow regex subset, not a Semgrep-equivalent
+			// engine. Say so in the coverage line rather than reporting a bare "ran".
+			if engine == EngineEmbedded && ad.Category() == CategorySAST {
+				detail = "embedded regex subset (no taint tracking); install semgrep for full SAST"
+			}
 			coverageMap[ad.Category()] = CoverageLine{
 				Category: ad.Category(),
 				Engine:   engine,
 				Status:   "ran",
+				Detail:   detail,
 			}
 
 			allFindings = append(allFindings, res...)
@@ -267,8 +302,10 @@ func (s *Scheduler) Execute(ctx context.Context, cfg *config.Config, opts ScanOp
 
 	wg.Wait()
 
-	// In CI mode, any adapter crash or failure MUST fail the gate with exit code 2
-	if opts.CI && len(adapterErrs) > 0 {
+	// In CI mode, any adapter crash or failure MUST fail the gate with exit code 2.
+	// Guard mode degrades gracefully instead: a missing optional engine must not block
+	// every commit on a developer machine.
+	if opts.CI && !opts.GuardMode && len(adapterErrs) > 0 {
 		return nil, fmt.Errorf("CI mode gate failure: scanner crash/error detected: %s", strings.Join(adapterErrs, "; "))
 	}
 
@@ -277,22 +314,43 @@ func (s *Scheduler) Execute(ctx context.Context, cfg *config.Config, opts ScanOp
 		warnings = append(warnings, "osv: embedded advisory list has 7 entries; install osv-scanner for full coverage")
 	}
 
-	// Determine overall mode
+	// Determine overall mode. A deliberately requested offline run, or an unreachable
+	// network, degrades a single category to an embedded advisory list but is reported
+	// as "degraded" — it must not be presented as a lite fallback, because every
+	// external engine is still installed and in use (B-05).
 	overallMode := "full"
 	for engName, eng := range enginesUsed {
 		// Native first-party engines (like resilience) do not trigger fallback lite mode
-		if eng == EngineEmbedded && engName != "resilience" {
+		if eng == EngineEmbedded && engName != "resilience" && !degradedEngines[engName] {
 			overallMode = "lite"
 			break
 		}
 	}
 
-	// If in CI mode and running in lite mode without --allow-lite, return error
-	if opts.CI && overallMode == "lite" && !opts.AllowLite {
+	// In CI mode, a lite fallback means a required engine is missing and results cannot
+	// be trusted. That is a scanner/config error (exit 2) unless --allow-lite was passed.
+	// Guard mode is exempt: a pre-commit hook runs on machines that may never have run
+	// the engine installer, and an embedded secrets/SAST result is a legitimate gate.
+	if opts.CI && !opts.GuardMode && overallMode == "lite" && !opts.AllowLite {
 		return nil, fmt.Errorf("CI mode error: scanner ran in 'lite' mode with embedded engines. Install required scanner binaries or specify --allow-lite")
 	}
 
+	// A degraded category in CI is an environmental fault unless the caller asked for it
+	// explicitly with --offline. Silently passing would hide real vulnerabilities behind
+	// a truncated advisory list.
+	if opts.CI && !opts.GuardMode && len(degradedEngines) > 0 && (cfg == nil || !cfg.Offline) {
+		names := make([]string, 0, len(degradedEngines))
+		for name := range degradedEngines {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		return nil, fmt.Errorf("CI mode error: %s degraded (network unreachable). Use --offline to scan with embedded advisories deliberately, or restore network access", strings.Join(names, ", "))
+	}
+
 	// 4. Correlate and Deduplicate
+	if opts.OnProgress != nil {
+		opts.OnProgress("correlate", "Deduplicating findings & scoring contextual risk...")
+	}
 	deduped := CorrelateAndDeduplicate(allFindings)
 
 	// 5. Score & Generate Remediation
@@ -391,4 +449,35 @@ func normalizeCategory(c string) string {
 	default:
 		return clean
 	}
+}
+
+func findToolBinary(bin string) (string, error) {
+	if p, err := exec.LookPath(bin); err == nil && p != "" {
+		return p, nil
+	}
+	exts := []string{""}
+	if filepath.Ext(bin) == "" {
+		exts = []string{".exe", ".cmd", ".bat", ""}
+	}
+	dirs := []string{"plugins", filepath.Join("..", "plugins"), filepath.Join("..", "..", "plugins")}
+	if exe, err := os.Executable(); err == nil {
+		dirs = append(dirs, filepath.Join(filepath.Dir(exe), "plugins"), filepath.Dir(exe))
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		dirs = append(dirs, filepath.Join(cwd, "plugins"))
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		dirs = append(dirs, filepath.Join(home, "go", "bin"))
+		dirs = append(dirs, filepath.Join(home, "AppData", "Local", "Programs", "Python", "Python311", "Scripts"))
+		dirs = append(dirs, filepath.Join(home, "AppData", "Local", "Programs", "Python", "Python312", "Scripts"))
+	}
+	for _, d := range dirs {
+		for _, ext := range exts {
+			cand := filepath.Join(d, bin+ext)
+			if info, err := os.Stat(cand); err == nil && !info.IsDir() {
+				return cand, nil
+			}
+		}
+	}
+	return "", exec.ErrNotFound
 }

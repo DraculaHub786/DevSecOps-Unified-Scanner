@@ -242,4 +242,3 @@ func TestCorrelateCanonicalDockerTaxonomy(t *testing.T) {
 		t.Errorf("expected richer fix suggestion with diff to be preserved")
 	}
 }
-

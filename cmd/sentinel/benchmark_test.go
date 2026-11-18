@@ -28,6 +28,8 @@ func TestBenchmarkScansTimingAndAccuracy(t *testing.T) {
 	}
 
 	cfg := config.DefaultConfig()
+	cfg.Engine = "embedded"
+	cfg.Offline = true
 	cfg.Scanners.DAST.Enabled = false
 
 	scheduler := orchestrator.NewScheduler(

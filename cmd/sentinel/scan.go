@@ -24,6 +24,7 @@ import (
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/orchestrator"
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/report"
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/threatmodel"
+	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/ui"
 )
 
 func newScanCmd() *cobra.Command {
@@ -50,6 +51,7 @@ func newScanCmd() *cobra.Command {
 		trustRepoPolicy bool
 		allFlag         bool
 		quickFlag       bool
+		simulateFlag    bool
 	)
 
 	cmd := &cobra.Command{
@@ -64,6 +66,10 @@ func newScanCmd() *cobra.Command {
 				repoPath = args[0]
 			} else {
 				repoPath = "."
+			}
+
+			if simulateFlag {
+				ui.RunSimulationDemo(repoPath)
 			}
 
 			runScanInternal(
@@ -111,6 +117,7 @@ func newScanCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&trustRepoPolicy, "trust-repo-policy", false, "In --ci, accept a .sentinel.yml found inside the scanned repository (default: refuse; use --config with a trusted policy)")
 	cmd.Flags().BoolVar(&allFlag, "all", false, "Unified scan: all checks + container images, git history, SBOM, and threat model into a single combined report")
 	cmd.Flags().BoolVar(&quickFlag, "quick", false, "Quick pre-commit scan: changed files only, secrets and SAST")
+	cmd.Flags().BoolVar(&simulateFlag, "simulate", false, "Run rich dynamic cybersecurity scanning simulation HUD")
 
 	return cmd
 }
@@ -230,7 +237,29 @@ func runScanInternal(
 		AllowLite:      allowLite,
 	}
 
+	var liveHUD *ui.LiveHUD
+	isInteractiveTerminal := ui.IsInteractive() && !ciMode && (formatStr == "" || strings.Contains(strings.ToLower(formatStr), "terminal"))
+	if isInteractiveTerminal {
+		liveHUD = ui.NewLiveHUD(absRepo)
+		liveHUD.Start(context.Background())
+		opts.OnProgress = func(stage string, detail string) {
+			if liveHUD != nil {
+				liveHUD.UpdateProgress(stage, detail)
+			}
+		}
+	}
+
+	scanStartTime := time.Now()
 	result, err := scheduler.Execute(context.Background(), cfg, opts)
+	if liveHUD != nil {
+		if elapsed := time.Since(scanStartTime); elapsed < 1800*time.Millisecond {
+			time.Sleep(1800*time.Millisecond - elapsed)
+		}
+		if result != nil {
+			liveHUD.SetFindings(result.Summary.Critical, result.Summary.High, result.Summary.Medium, result.Summary.Low)
+		}
+		liveHUD.Stop()
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Scan execution failed: %v\n", err)
 		os.Exit(2)

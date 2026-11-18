@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -31,6 +31,11 @@ func New() *SemgrepAdapter {
 func (a *SemgrepAdapter) Name() string {
 	return "semgrep"
 }
+
+// LitePatternCount is the number of hand-written regex rules in the embedded
+// fallback engine. It is exported so coverage reporting can state honestly how
+// narrow lite mode is instead of implying full SAST coverage (P-06).
+const LitePatternCount = 15
 
 func (a *SemgrepAdapter) Category() string {
 	return orchestrator.CategorySAST
@@ -77,7 +82,11 @@ func (a *SemgrepAdapter) Run(ctx context.Context, repoPath string, cfg *config.C
 		return nil, nil
 	}
 
-	binPath, err := exec.LookPath("semgrep")
+	if cfg.Engine == "embedded" {
+		return a.runNativeFallback(repoPath, cfg)
+	}
+
+	binPath, err := adapters.FindToolBinary("semgrep")
 	if err != nil || binPath == "" {
 		if cfg.Engine == "external" {
 			return nil, fmt.Errorf("semgrep executable not found in PATH and engine is configured as 'external'")
@@ -184,12 +193,79 @@ func registryReachable() bool {
 	return true
 }
 
-// Semgrep prefixes rule IDs with the directory of the config file. Bundled rules are
-// extracted to a random temp dir, so strip that prefix to keep rule IDs (and the
-// fingerprints, baselines and suppressions built from them) stable between runs.
-var tempRulesPrefix = regexp.MustCompile(`^.*sentinel-rules-\d+\.`)
+// Semgrep prefixes every rule ID with the directory of the config file it came from.
+// The same rule can therefore arrive as "org-x", "rules.org-x" (from an extra_rules
+// path) or "sentinel-rules-12345.org-x" (from the extracted bundle). Left unnormalised,
+// each prefix hashes to a different finding ID and cross-tool correlation sees two
+// distinct issues for one real problem (B-01).
+//
+// Rather than guessing at directory prefixes, canonicalise against the set of rule IDs
+// Sentinel actually ships: if a returned ID ends with ".<known-rule>", it is that rule.
+// Registry packs (p/default) are not in the set and are passed through untouched.
+var (
+	bundledRuleIDsOnce sync.Once
+	bundledRuleIDs     map[string]struct{}
+	bundledRuleIDSlice []string
+	knownRuleIDPattern = regexp.MustCompile(`(?m)^\s*-\s*id:\s*([A-Za-z0-9_.\-]+)\s*$`)
+)
 
-func normalizeRuleID(id string) string { return tempRulesPrefix.ReplaceAllString(id, "") }
+// loadBundledRuleIDs parses every embedded, Semgrep-compatible rule pack once and
+// records the declared rule IDs.
+func loadBundledRuleIDs() {
+	bundledRuleIDs = make(map[string]struct{})
+	entries, err := rules.Content.ReadDir(".")
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".yml") {
+			continue
+		}
+		// Resilience rules are native and never executed by Semgrep.
+		if strings.HasPrefix(entry.Name(), "resilience") {
+			continue
+		}
+		data, err := rules.Content.ReadFile(entry.Name())
+		if err != nil {
+			continue
+		}
+		for _, m := range knownRuleIDPattern.FindAllSubmatch(data, -1) {
+			id := string(m[1])
+			if _, seen := bundledRuleIDs[id]; seen {
+				continue
+			}
+			bundledRuleIDs[id] = struct{}{}
+			bundledRuleIDSlice = append(bundledRuleIDSlice, id)
+		}
+	}
+	// Longest first so that "org-jwt-none-algorithm-python" is matched before its
+	// prefix "org-jwt-none-algorithm" when stripping a directory qualifier.
+	sort.Slice(bundledRuleIDSlice, func(i, j int) bool {
+		return len(bundledRuleIDSlice[i]) > len(bundledRuleIDSlice[j])
+	})
+}
+
+// normalizeRuleID strips any directory prefix Semgrep added, resolving the ID back to
+// the canonical bundled rule ID so findings stay stable and deduplicable across runs.
+func normalizeRuleID(id string) string {
+	bundledRuleIDsOnce.Do(loadBundledRuleIDs)
+
+	if _, ok := bundledRuleIDs[id]; ok {
+		return id
+	}
+	for _, known := range bundledRuleIDSlice {
+		if strings.HasSuffix(id, "."+known) {
+			return known
+		}
+	}
+	// Unknown (e.g. registry pack) rule: keep the ID intact, but still drop the
+	// volatile extraction-directory prefix so fingerprints remain stable.
+	return tempRulesPrefix.ReplaceAllString(id, "")
+}
+
+// tempRulesPrefix matches the volatile extraction directory Semgrep prepends to rule
+// IDs when the rules were loaded from a generated temp directory.
+var tempRulesPrefix = regexp.MustCompile(`^.*sentinel-rules-\d+\.`)
 
 func (a *SemgrepAdapter) runCLI(ctx context.Context, binPath, repoPath string, cfg *config.Config) ([]orchestrator.Finding, error) {
 	// --disable-version-check stops Semgrep phoning home (and stalling when offline).
@@ -316,6 +392,15 @@ func ParseOutput(data []byte, repoPath string, cfg *config.Config) ([]orchestrat
 
 	findings := make([]orchestrator.Finding, 0, len(report.Results))
 	for _, res := range report.Results {
+		// A result with no file or a non-positive line cannot be located in the source
+		// tree. Semgrep never emits this, but a patched or compromised engine can, and a
+		// negative line would propagate into SARIF, the terminal renderer and the risk
+		// scorer. Drop it rather than reporting an unactionable finding (found by
+		// FuzzParseOutput).
+		if res.Start.Line <= 0 || strings.TrimSpace(res.Path) == "" {
+			continue
+		}
+
 		relFile, _ := filepath.Rel(repoPath, res.Path)
 		if relFile == "" {
 			relFile = res.Path
@@ -407,6 +492,9 @@ type sastRule struct {
 }
 
 func (a *SemgrepAdapter) runNativeFallback(repoPath string, cfg *config.Config) ([]orchestrator.Finding, error) {
+	// The embedded engine is a deliberately narrow regex subset. It cannot perform
+	// taint tracking or inter-procedural analysis, so its findings must not be
+	// presented as equivalent to a Semgrep run.
 	rules := []sastRule{
 		{
 			ID:       "sast-sql-injection-concat",

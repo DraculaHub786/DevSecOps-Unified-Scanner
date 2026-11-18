@@ -43,19 +43,19 @@ const (
 
 // Finding represents a unified normalized security flaw across all scanners.
 type Finding struct {
-	ID            string    `json:"id"`
-	Source        string    `json:"source"`
-	Engine        string    `json:"engine"` // "external" | "embedded"
-	Category      string    `json:"category"`
-	Rule          string    `json:"rule"`
-	Severity      string    `json:"severity"`
-	CWE           string    `json:"cwe,omitempty"`
-	CVE           string    `json:"cve,omitempty"`
-	CVSS          float64   `json:"cvss,omitempty"`
-	File          string    `json:"file"`
-	LineStart     int       `json:"line_start"`
-	LineEnd       int       `json:"line_end"`
-	Message       string    `json:"message"`
+	ID                string    `json:"id"`
+	Source            string    `json:"source"`
+	Engine            string    `json:"engine"` // "external" | "embedded"
+	Category          string    `json:"category"`
+	Rule              string    `json:"rule"`
+	Severity          string    `json:"severity"`
+	CWE               string    `json:"cwe,omitempty"`
+	CVE               string    `json:"cve,omitempty"`
+	CVSS              float64   `json:"cvss,omitempty"`
+	File              string    `json:"file"`
+	LineStart         int       `json:"line_start"`
+	LineEnd           int       `json:"line_end"`
+	Message           string    `json:"message"`
 	Snippet           string    `json:"snippet,omitempty"`
 	OWASP             string    `json:"owasp,omitempty"`
 	Reachable         *bool     `json:"reachable,omitempty"`

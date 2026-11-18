@@ -51,8 +51,14 @@ public class TestRules {
         // ruleid: org-cors-wildcard-header
         resp.setHeader("Access-Control-Allow-Origin", "*");
 
+        // ruleid: org-hardcoded-credential-camelcase
+        String DBPassword = "SuperSecretPassword123!";
+
         // ruleid: org-jwt-none-algorithm
         Algorithm.none();
+
+        // ruleid: org-java-weak-crypto-md5-sha1
+        java.security.MessageDigest.getInstance("MD5");
     }
 }
 

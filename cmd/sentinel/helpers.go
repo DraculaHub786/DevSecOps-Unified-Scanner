@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -21,10 +22,8 @@ import (
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/adapters/semgrep"
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/adapters/trivy"
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/config"
-	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/doctor"
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/orchestrator"
 	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/internal/report"
-	"github.com/DraculaHub786/DevSecOps-Unified-Scanner/rules"
 )
 
 // lookupFinding retrieves a finding by ID from recent scan cache, falling back to rescan only if not found (P-11).
@@ -319,64 +318,134 @@ func newWatchCmd() *cobra.Command {
 }
 
 func newInstallHooksCmd() *cobra.Command {
-	return &cobra.Command{
+	var force bool
+
+	cmd := &cobra.Command{
 		Use:   "install-hooks",
-		Short: "Install Sentinel pre-commit git hook to prevent committing secrets and critical flaws",
+		Short: "Install pre-commit and pre-push guard hooks into this git repository",
+		Long: `Installs git hooks that call 'sentinel guard'.
+
+The absolute path of the running Sentinel binary is baked into the generated hook,
+because PATH inside a git hook is frequently not the developer's interactive PATH.
+A hook that cannot find its binary is a hook that silently protects nothing.`,
 		Run: func(cmd *cobra.Command, args []string) {
-			gitHookDir := filepath.Join(".git", "hooks")
-			if _, err := os.Stat(gitHookDir); err != nil {
-				fmt.Fprintln(os.Stderr, "Error: current directory is not the root of a git repository.")
+			hooksDir, err := resolveHooksDir(".")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				os.Exit(1)
 			}
 
-			hookPath := filepath.Join(gitHookDir, "pre-commit")
-			hookContent := `#!/bin/sh
-# Sentinel DevSecOps Pre-Commit Guard
-echo "🛡️ Running Sentinel pre-commit security verification..."
-sentinel scan --fail-on=high --ci
-EXIT_CODE=$?
-if [ $EXIT_CODE -ne 0 ]; then
-  echo "❌ Sentinel blocked commit due to high/critical security findings."
-  echo "Run 'sentinel scan' to review findings or 'sentinel fix <id>' to resolve."
-  exit 1
-fi
-echo "✅ Sentinel security checks passed."
-exit 0
-`
-			if err := os.WriteFile(hookPath, []byte(hookContent), 0755); err != nil {
-				fmt.Fprintf(os.Stderr, "Failed to write hook: %v\n", err)
+			binPath, err := os.Executable()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: cannot determine Sentinel binary path: %v\n", err)
 				os.Exit(2)
 			}
+			binPath = filepath.ToSlash(binPath)
 
-			fmt.Println("✅ Sentinel pre-commit hook successfully installed to .git/hooks/pre-commit")
+			hooks := []struct {
+				name  string
+				stage string
+			}{
+				{"pre-commit", "pre-commit"},
+				{"pre-push", "pre-push"},
+			}
+
+			for _, h := range hooks {
+				hookPath := filepath.Join(hooksDir, h.name)
+				if _, statErr := os.Stat(hookPath); statErr == nil && !force {
+					existing, _ := os.ReadFile(hookPath)
+					if !strings.Contains(string(existing), "sentinel guard") {
+						fmt.Fprintf(os.Stderr, "⚠️  %s already exists and is not a Sentinel hook; leaving it untouched (use --force to overwrite).\n", h.name)
+						continue
+					}
+				}
+
+				content := fmt.Sprintf(`#!/bin/sh
+# Sentinel commit guard — installed by 'sentinel install-hooks'
+# The binary path is absolute and quoted on purpose: PATH inside git hooks is often
+# minimal, and install paths routinely contain spaces (e.g. "DevSecOps Unified Scanner").
+SENTINEL_BIN='%s'
+
+if [ ! -x "$SENTINEL_BIN" ]; then
+  echo "sentinel: guard binary missing at $SENTINEL_BIN" >&2
+  echo "sentinel: reinstall with 'sentinel install-hooks', or bypass once with SENTINEL_SKIP=1" >&2
+  # Fail open only on an explicit bypass, so a broken install is loud, not silent.
+  if [ -n "$SENTINEL_SKIP" ]; then exit 0; fi
+  exit 2
+fi
+
+"$SENTINEL_BIN" guard --stage %s --fail-on high
+exit $?
+`, binPath, h.stage)
+
+				if err := os.WriteFile(hookPath, []byte(content), 0755); err != nil {
+					fmt.Fprintf(os.Stderr, "Failed to write %s: %v\n", h.name, err)
+					os.Exit(2)
+				}
+				fmt.Printf("✅ Installed %s -> %s\n", filepath.ToSlash(hookPath), binPath)
+			}
+
+			fmt.Println("\nCommits are now checked for secrets and SAST findings.")
+			fmt.Println("Bypass a single commit with: SENTINEL_SKIP=1 git commit ...")
 		},
 	}
+
+	cmd.Flags().BoolVar(&force, "force", false, "Overwrite an existing non-Sentinel hook")
+	return cmd
 }
 
-func newVersionCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "version",
-		Short: "Print Sentinel version and scanner engine availability",
-		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Printf("Sentinel DevSecOps Unified Scanner v%s (commit: %s, built: %s)\n", version, commit, date)
-			stats, err := rules.CountRules()
-			if err != nil {
-				fmt.Println("Rules: embedded v1 (error counting rules)")
-			} else {
-				fmt.Println(stats.Summary())
-			}
-			fmt.Println("\nDetected Scanner Engines:")
-			statuses := doctor.CheckEngines()
-			for _, s := range statuses {
-				ver := s.Version
-				if ver == "" {
-					ver = "none"
-				}
-				fmt.Printf("  • %-12s: %-10s (%s)\n", s.Name, ver, s.Mode)
-			}
-			fmt.Println("\nUse 'sentinel doctor' for deep diagnostics, paths, and pinned version comparison.")
-		},
+// resolveHooksDir finds .git/hooks, honouring core.hooksPath and linked worktrees.
+func resolveHooksDir(repoPath string) (string, error) {
+	// core.hooksPath overrides the default location entirely.
+	if out := gitLines(repoPath, "config", "--get", "core.hooksPath"); len(out) > 0 {
+		custom := out[0]
+		if !filepath.IsAbs(custom) {
+			absRepo, _ := filepath.Abs(repoPath)
+			custom = filepath.Join(absRepo, custom)
+		}
+		if err := os.MkdirAll(custom, 0755); err != nil {
+			return "", err
+		}
+		return custom, nil
 	}
+
+	// In a linked worktree .git is a file pointing at the real git dir.
+	if out := gitLines(repoPath, "rev-parse", "--git-dir"); len(out) > 0 {
+		gitDir := out[0]
+		if !filepath.IsAbs(gitDir) {
+			absRepo, _ := filepath.Abs(repoPath)
+			gitDir = filepath.Join(absRepo, gitDir)
+		}
+		hooks := filepath.Join(gitDir, "hooks")
+		if err := os.MkdirAll(hooks, 0755); err != nil {
+			return "", err
+		}
+		return hooks, nil
+	}
+
+	return "", fmt.Errorf("not a git repository (run 'git init' first)")
+}
+
+// normalizeEngineVersion reduces a tool's raw --version output to a bare semver.
+// The raw output was pasted straight into the table, producing rows like
+// "osv-scanner version: 2.7.0" and "[INF] Nuclei Engine Version: v3.3.8" that read as
+// log spam rather than a version table.
+func normalizeEngineVersion(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "-"
+	}
+	re := regexp.MustCompile(`\d+\.\d+(?:\.\d+)?(?:[-+][0-9A-Za-z.\-]+)?`)
+	if m := re.FindString(raw); m != "" {
+		return m
+	}
+	// No version number at all: keep the first line, minus common log prefixes.
+	first := strings.SplitN(raw, "\n", 2)[0]
+	first = strings.TrimSpace(strings.TrimPrefix(first, "[INF] "))
+	if len(first) > 40 {
+		first = first[:40]
+	}
+	return first
 }
 
 func getGitCommit(repoPath string) string {

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -52,7 +51,11 @@ func (a *GitleaksAdapter) Run(ctx context.Context, repoPath string, cfg *config.
 		return nil, nil
 	}
 
-	binPath, err := exec.LookPath("gitleaks")
+	if cfg.Engine == "embedded" {
+		return a.runNativeFallback(repoPath, cfg)
+	}
+
+	binPath, err := adapters.FindToolBinary("gitleaks")
 	if err != nil || binPath == "" {
 		if cfg.Engine == "external" {
 			return nil, fmt.Errorf("gitleaks executable not found in PATH and engine is configured as 'external'")
@@ -169,8 +172,11 @@ func (a *GitleaksAdapter) runNativeFallback(repoPath string, cfg *config.Config)
 		{
 			ID:          "aws-access-key-id",
 			Description: "Identified hardcoded AWS Access Key ID",
-			Pattern:     regexp.MustCompile(`(?i)(?:aws_access_key_id|aws_key|aws_access_key)[\s=:'"]*(AKIA[0-9A-Z]{16})`),
-			CWE:         "CWE-798",
+			// Match the bare AKIA prefix too. Requiring an "aws_access_key_id" assignment
+			// (as this rule previously did) missed the most common real-world form,
+			// `const k = "AKIA..."`, which is exactly what a pre-commit guard must catch.
+			Pattern: regexp.MustCompile(`\b(AKIA[0-9A-Z]{16})\b|(?i)(?:aws_access_key_id|aws_key|aws_access_key)[\s=:'"]*(AKIA[0-9A-Z]{16})`),
+			CWE:     "CWE-798",
 		},
 		{
 			ID:          "aws-secret-access-key",

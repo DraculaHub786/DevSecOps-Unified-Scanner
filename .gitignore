@@ -20,6 +20,10 @@ plugins/osv-scanner*
 plugins/trivy*
 plugins/nuclei*
 plugins/semgrep*
+plugins/govulncheck*
+plugins/LICENSE*
+plugins/README*
+plugins/contrib/
 
 
 # Node dependencies & artifacts

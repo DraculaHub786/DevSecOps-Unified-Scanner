@@ -53,4 +53,7 @@
 3. **N-3 (PR-Flow Synthetic Token Detection)**: Replaced test token with high-entropy token `R8kD3mZq1Xv7LpN2sT9wYb4HcF6jGa0UeQ5o` matching Gitleaks entropy criteria.
 4. **N-5 (Single Version Source)**: Introduced root `VERSION` file with `cmd/sentinel/version_test.go` integration test enforcing absolute parity across CLI, Dockerfiles, Homebrew formula, Action, and VS Code extension.
 5. **N-6 (Docker Download Cryptographic Verification)**: Added SHA-256 integrity verification against `plugins/checksums.txt` inside `Dockerfile` and `deploy/docker/Dockerfile.cli` prior to extracting any downloaded scanner binary.
-6. **Phase 4 (Proof & Benchmarks Verified)**: Added automated integration benchmark test `cmd/sentinel/benchmark_test.go` asserting timing thresholds (<10s SLA) and zero false merges; published `docs/benchmarks.md` and comparative performance table in `README.md`.
+6. **Phase 1 & 2 (External Engine & Supply-Chain Hardening)**: All 5 security scanning engines installed, checksum-verified, and discoverable via dynamic binary discovery. Single version source `VERSION` strictly enforced.
+7. **Phase 3 & 6 (Extension Confidence & Marketplace Packaging)**: Automated 9-suite extension unit tests passing (AT-27a-d); VSIX package `sentinel-vscode-1.0.2.vsix` built cleanly with pinned `@vscode/vsce`.
+8. **Phase 4 & 5 (Proof, Benchmarks & Real Remediation)**: Added automated integration benchmark test `cmd/sentinel/benchmark_test.go` asserting timing thresholds (<10s SLA) and zero false merges; published `docs/benchmarks.md` and comparative performance table in `README.md`; automated remediation diff preview and live re-scan verification active across all categories.
+

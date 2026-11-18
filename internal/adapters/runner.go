@@ -67,3 +67,58 @@ func LogEngineStderr(repoPath, engine string, stderr []byte) string {
 	}
 	return filepath.ToSlash(rel)
 }
+
+// FindToolBinary searches for an external tool binary in system PATH, the local plugins/ directory,
+// the binary's directory plugins, and standard user tool directories (Go bin, Python scripts).
+func FindToolBinary(bin string) (string, error) {
+	// 1. Standard LookPath in system PATH
+	if path, err := exec.LookPath(bin); err == nil && path != "" {
+		return path, nil
+	}
+
+	// Extensions to check
+	exts := []string{""}
+	if filepath.Ext(bin) == "" {
+		exts = []string{".exe", ".cmd", ".bat", ""}
+	}
+
+	// 2. Candidate search locations
+	var dirs []string
+	// Relative plugins directories
+	dirs = append(dirs, "plugins", filepath.Join("..", "plugins"), filepath.Join("..", "..", "plugins"))
+
+	// Directory of the current running executable
+	if exe, err := os.Executable(); err == nil {
+		dirs = append(dirs, filepath.Join(filepath.Dir(exe), "plugins"))
+		dirs = append(dirs, filepath.Dir(exe))
+	}
+
+	// Working directory plugins
+	if cwd, err := os.Getwd(); err == nil {
+		dirs = append(dirs, filepath.Join(cwd, "plugins"))
+	}
+
+	// User home directories (Go bin, Python Scripts)
+	if home, err := os.UserHomeDir(); err == nil {
+		dirs = append(dirs, filepath.Join(home, "go", "bin"))
+		dirs = append(dirs, filepath.Join(home, "AppData", "Local", "Programs", "Python", "Python311", "Scripts"))
+		dirs = append(dirs, filepath.Join(home, "AppData", "Local", "Programs", "Python", "Python312", "Scripts"))
+		dirs = append(dirs, filepath.Join(home, "AppData", "Roaming", "Python", "Python311", "Scripts"))
+		dirs = append(dirs, filepath.Join(home, "AppData", "Roaming", "Python", "Python312", "Scripts"))
+		dirs = append(dirs, filepath.Join(home, ".local", "bin"))
+	}
+
+	for _, d := range dirs {
+		for _, ext := range exts {
+			candidate := filepath.Join(d, bin+ext)
+			if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+				if abs, err := filepath.Abs(candidate); err == nil {
+					return abs, nil
+				}
+				return candidate, nil
+			}
+		}
+	}
+
+	return "", exec.ErrNotFound
+}

@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -138,7 +137,7 @@ func CheckEngines() []ToolStatus {
 			Recommended:   t.recommended,
 		}
 
-		path, err := exec.LookPath(t.bin)
+		path, err := adapters.FindToolBinary(t.bin)
 		if err == nil && path != "" {
 			st.Found = true
 			st.Path = path
@@ -228,4 +227,3 @@ func PrintPrivacy() {
 	fmt.Println("  All dependency and rule checks degrade gracefully to local embedded data.")
 	fmt.Println("=========================================================================")
 }
-

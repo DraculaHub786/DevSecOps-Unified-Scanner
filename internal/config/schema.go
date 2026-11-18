@@ -101,9 +101,11 @@ func DefaultConfig() *Config {
 			SAST: SASTConfig{
 				Enabled: true,
 				Ruleset: "auto",
-				ExtraRules: []string{
-					"rules/sast-rules.yml",
-				},
+				// No default extra_rules. Sentinel's own rule packs are embedded in the
+				// binary and always loaded; pointing extra_rules at the same file made Semgrep
+				// evaluate every rule twice under two different ID prefixes, producing duplicate
+				// findings that cross-tool correlation could not merge (B-01).
+				ExtraRules: []string{},
 			},
 			Secrets: SecretsConfig{
 				Enabled:     true,

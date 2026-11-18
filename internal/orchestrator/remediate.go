@@ -478,4 +478,3 @@ func ApplyFix(repoPath string, f *Finding) (string, error) {
 
 	return "", fmt.Errorf("diff could not be cleanly matched against existing file content")
 }
-

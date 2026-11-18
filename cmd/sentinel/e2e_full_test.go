@@ -74,6 +74,7 @@ func TestE2EExpectedFindingsVulnerableApp(t *testing.T) {
 
 	vulnerableAppPath := filepath.Join(rootDir, "testdata", "vulnerable-app")
 	cfg := config.DefaultConfig()
+	cfg.Engine = "embedded"
 	cfg.Offline = true
 
 	scheduler := newTestScheduler()
@@ -130,6 +131,7 @@ func TestE2ESafeAppZeroFindings(t *testing.T) {
 
 	safeAppPath := filepath.Join(rootDir, "testdata", "safe-app")
 	cfg := config.DefaultConfig()
+	cfg.Engine = "embedded"
 	cfg.Offline = true
 
 	scheduler := newTestScheduler()
@@ -159,6 +161,7 @@ func TestE2EDASTPassiveTargetServer(t *testing.T) {
 	defer server.Close()
 
 	cfg := config.DefaultConfig()
+	cfg.Engine = "embedded"
 	cfg.Scanners.DAST.Enabled = true
 	cfg.Scanners.DAST.Target = server.URL
 	cfg.Scanners.DAST.Allowlist = []string{"127.0.0.1", "localhost"}

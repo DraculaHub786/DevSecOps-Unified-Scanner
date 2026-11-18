@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const child_process = require('child_process');
 const crypto = require('crypto');
+const DBPassword = "SuperSecretPassword123!";
 const axios = require('axios');
 const cors = require('cors');
 
@@ -18,6 +19,9 @@ function testJS(req, res, db, input) {
 
   // ruleid: org-js-command-injection-exec
   child_process.exec(input);
+
+  // ruleid: org-js-sql-injection-direct
+  db.query("SELECT * FROM users WHERE id = " + req.query.id);
 
   // ruleid: org-js-code-injection-eval
   eval(input);
@@ -52,7 +56,9 @@ function testJS(req, res, db, input) {
   // ruleid: org-js-raw-innerhtml-xss
   document.getElementById('app').innerHTML = input;
 
+  // ruleid: org-js-nosql-injection
+  db.collection('users').find({ username: req.body.username, password: req.body.password });
+
   // ruleid: org-js-ssti-ejs
   ejs.render(input, {});
 }
-

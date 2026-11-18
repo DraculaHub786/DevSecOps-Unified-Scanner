@@ -60,6 +60,7 @@ func (m metrics) F1() float64 {
 
 func newBenchDetectCmd() *cobra.Command {
 	var minScore float64
+	var useEmbedded bool
 
 	cmd := &cobra.Command{
 		Use:   "bench-detect [benchmark-dir]",
@@ -103,12 +104,19 @@ func newBenchDetectCmd() *cobra.Command {
 				govulncheck.New(),
 			)
 
+			// By default measure the *real* engines, because that is what users run.
+			// --embedded measures the lite regex fallback instead. Silently defaulting to
+			// embedded (as this command used to) meant the published precision/recall
+			// figures described the fallback engine, not Semgrep.
 			cfg := config.DefaultConfig()
 			cfg.Offline = true
+			if useEmbedded {
+				cfg.Engine = "embedded"
+			}
 
 			opts := orchestrator.ScanOptions{
 				RepoPath: absBenchDir,
-				Timeout:  45 * time.Second,
+				Timeout:  90 * time.Second,
 			}
 
 			result, err := scheduler.Execute(context.Background(), cfg, opts)
@@ -129,7 +137,11 @@ func newBenchDetectCmd() *cobra.Command {
 				return catMetrics[cat]
 			}
 
-			// Count TP and FP from actual findings
+			// Count TP and FP from actual findings.
+			// Matching requires category, file AND line proximity. Matching on category+file
+			// alone (as this command used to) made one finding satisfy a whole file's worth
+			// of ground truth, inflating TP and hiding real misses.
+			const lineTolerance = 2
 			for _, f := range result.Findings {
 				relFile := filepath.ToSlash(f.File)
 				matchedGTIndex := -1
@@ -139,11 +151,21 @@ func newBenchDetectCmd() *cobra.Command {
 						continue
 					}
 					gtRel := filepath.ToSlash(gt.File)
-					if strings.EqualFold(gt.Category, f.Category) &&
-						(strings.HasSuffix(relFile, gtRel) || strings.EqualFold(relFile, gtRel)) {
-						matchedGTIndex = idx
-						break
+					if !strings.EqualFold(gt.Category, f.Category) {
+						continue
 					}
+					if !(strings.HasSuffix(relFile, gtRel) || strings.EqualFold(relFile, gtRel)) {
+						continue
+					}
+					delta := f.LineStart - gt.Line
+					if delta < 0 {
+						delta = -delta
+					}
+					if delta > lineTolerance {
+						continue
+					}
+					matchedGTIndex = idx
+					break
 				}
 
 				m := getCat(f.Category)
@@ -190,5 +212,6 @@ func newBenchDetectCmd() *cobra.Command {
 	}
 
 	cmd.Flags().Float64Var(&minScore, "min-f1", 0.8, "Minimum acceptable overall F1-score")
+	cmd.Flags().BoolVar(&useEmbedded, "embedded", false, "Measure the embedded lite regex engine instead of the real external engines")
 	return cmd
 }

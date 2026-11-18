@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -66,7 +65,11 @@ func (a *NucleiAdapter) Run(ctx context.Context, repoPath string, cfg *config.Co
 		return nil, fmt.Errorf("DAST safety refusal: %w", err)
 	}
 
-	binPath, err := exec.LookPath("nuclei")
+	if cfg.Engine == "embedded" {
+		return a.runPassiveNativeChecks(ctx, targetURL, cfg)
+	}
+
+	binPath, err := adapters.FindToolBinary("nuclei")
 	if err != nil || binPath == "" {
 		if cfg.Engine == "external" {
 			return nil, fmt.Errorf("nuclei executable not found in PATH and engine is configured as 'external'")

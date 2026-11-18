@@ -33,6 +33,13 @@ jobs:
       - name: Run Tests with Race Detector
         run: go test -race ./...
 
+      - name: Parser Fuzz Smoke Test (short budget)
+        run: |
+          go test ./internal/config -run '^$' -fuzz FuzzLoadFile -fuzztime 20s
+          go test ./internal/adapters/semgrep -run '^$' -fuzz FuzzParseOutput -fuzztime 20s
+          go test ./internal/adapters/semgrep -run '^$' -fuzz FuzzNormalizeRuleID -fuzztime 15s
+          go test ./internal/orchestrator -run '^$' -fuzz FuzzCorrelateAndDeduplicate -fuzztime 20s
+
       - name: Vulnerability Check (govulncheck - pinned v1.1.4)
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
 

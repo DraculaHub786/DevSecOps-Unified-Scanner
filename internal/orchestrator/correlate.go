@@ -7,44 +7,88 @@ import (
 	"time"
 )
 
-// RuleTaxonomy maps tool-specific rule IDs or patterns to a canonical issue key (P-14).
+// RuleTaxonomy maps tool-specific rule IDs to a canonical issue key (P-14). Two tools
+// that describe the same underlying defect must map to the same key so correlation can
+// merge them instead of reporting the issue twice.
 var RuleTaxonomy = map[string]string{
-	// Dockerfile / Container rules
-	"avd-ds-0001":                           "docker-latest-tag",
-	"ds001":                                 "docker-latest-tag",
-	"org-supplychain-docker-latest-tag":      "docker-latest-tag",
-	"docker-latest-tag":                     "docker-latest-tag",
+	// --- Dockerfile / container misconfiguration ---
+	// Trivy emits "DS-0001"; older builds used "AVD-DS-0001". Both are registered.
+	"avd-ds-0001":                       "docker-latest-tag",
+	"ds-0001":                           "docker-latest-tag",
+	"ds001":                             "docker-latest-tag",
+	"org-supplychain-docker-latest-tag": "docker-latest-tag",
+	"docker-latest-tag":                 "docker-latest-tag",
 
-	"avd-ds-0002":                           "docker-run-as-root",
-	"ds002":                                 "docker-run-as-root",
-	"org-supplychain-docker-root-user":      "docker-run-as-root",
-	"docker-run-as-root":                    "docker-run-as-root",
+	"avd-ds-0002":                      "docker-run-as-root",
+	"ds-0002":                          "docker-run-as-root",
+	"ds002":                            "docker-run-as-root",
+	"org-supplychain-docker-root-user": "docker-run-as-root",
+	"docker-run-as-root":               "docker-run-as-root",
 
 	"avd-ds-0026":                           "docker-missing-healthcheck",
+	"ds-0026":                               "docker-missing-healthcheck",
 	"ds026":                                 "docker-missing-healthcheck",
 	"org-supplychain-docker-no-healthcheck": "docker-missing-healthcheck",
 	"docker-missing-healthcheck":            "docker-missing-healthcheck",
 
-	// Secrets rules
-	"github-pat":                            "secret-github-pat",
-	"aws-access-key-id":                     "secret-aws-access-key",
-	"aws-secret-access-key":                 "secret-aws-secret-key",
-	"slack-bot-token":                       "secret-slack-token",
-	"slack-webhook-url":                     "secret-slack-webhook",
+	// --- Secrets ---
+	"github-pat":                    "secret-github-pat",
+	"aws-access-key-id":             "secret-aws-access-key",
+	"aws-secret-access-key":         "secret-aws-secret-key",
+	"slack-bot-token":               "secret-slack-token",
+	"slack-webhook-url":             "secret-slack-webhook",
+	"org-hardcoded-github-token":    "secret-github-pat",
+	"org-hardcoded-aws-credentials": "secret-aws-access-key",
+	"org-hardcoded-slack-webhook":   "secret-slack-webhook",
 
-	// SAST / Web patterns
-	"org-js-sql-injection-concat":           "sast-sql-injection",
-	"org-go-sql-injection-concat":           "sast-sql-injection",
-	"org-python-sql-injection-format":       "sast-sql-injection",
-	"org-js-command-injection":              "sast-command-injection",
-	"org-python-command-injection":          "sast-command-injection",
+	// --- Injection ---
+	"org-js-sql-injection-concat":        "sast-sql-injection",
+	"org-go-sql-injection-concat":        "sast-sql-injection",
+	"org-go-sql-injection-sprintf":       "sast-sql-injection",
+	"org-python-sql-injection-format":    "sast-sql-injection",
+	"org-java-sql-injection-concat":      "sast-sql-injection",
+	"org-js-command-injection-exec":      "sast-command-injection",
+	"org-go-command-injection-sh":        "sast-command-injection",
+	"org-python-command-injection-shell": "sast-command-injection",
+	"org-java-command-injection-runtime": "sast-command-injection",
+
+	// --- Transport / TLS ---
+	"org-go-insecure-skip-verify":      "sast-tls-verify-disabled",
+	"org-python-requests-verify-false": "sast-tls-verify-disabled",
+	"org-js-reject-unauthorized-false": "sast-tls-verify-disabled",
 }
 
-// CanonicalIssueType resolves a category and rule into a canonical taxonomy issue key.
+// CanonicalIssueType resolves a rule into a canonical taxonomy issue key. Lookup is
+// tolerant of the directory qualifier Semgrep adds ("rules.org-x"), of "avd-" prefixes,
+// and of zero-padding differences ("DS-0001" vs "DS001") (B-02).
 func CanonicalIssueType(category, rule string) string {
 	lower := strings.ToLower(strings.TrimSpace(rule))
-	if canon, ok := RuleTaxonomy[lower]; ok {
-		return canon
+	if lower == "" {
+		return ""
+	}
+
+	candidates := []string{lower}
+
+	// Strip any directory qualifier: "rules.org-x" -> "org-x".
+	if idx := strings.LastIndex(lower, "."); idx != -1 && idx < len(lower)-1 {
+		candidates = append(candidates, lower[idx+1:])
+	}
+
+	// Normalise the Trivy "avd-ds-NNNN" / "ds-NNNN" / "dsNNN" family to a single form.
+	for _, c := range candidates {
+		trimmed := strings.TrimPrefix(c, "avd-")
+		candidates = append(candidates, trimmed)
+		if strings.HasPrefix(trimmed, "ds-") || strings.HasPrefix(trimmed, "ds0") {
+			digits := strings.TrimLeft(trimmed, "ds-")
+			digits = strings.TrimPrefix(digits, "ds")
+			candidates = append(candidates, "ds-"+digits, "ds"+digits)
+		}
+	}
+
+	for _, c := range candidates {
+		if canon, ok := RuleTaxonomy[c]; ok {
+			return canon
+		}
 	}
 	return ""
 }

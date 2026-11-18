@@ -81,3 +81,46 @@ func TestTruncateRunesUTF8Boundary(t *testing.T) {
 		t.Errorf("expected 52 runes, got %d", utf8.RuneCountInString(truncated))
 	}
 }
+
+func TestCleanFixSummarySecretRotation(t *testing.T) {
+	checklist := "Rotation Checklist for GitHub Token:\n" +
+		"1. Immediately REVOKE at: https://github.com/settings/tokens\n" +
+		"2. Replace hardcoded literal in server.js with environment variable\n" +
+		"3. Ensure server.js is listed in .gitignore\n" +
+		"4. Install pre-commit protection: `sentinel install-hooks`"
+
+	summary := cleanFixSummary(checklist, 60)
+	if strings.Contains(summary, "\n") || strings.Contains(summary, "\r") {
+		t.Errorf("cleanFixSummary must not contain newlines, got: %q", summary)
+	}
+	if !strings.HasPrefix(summary, "Immediately REVOKE") {
+		t.Errorf("expected summary to start with actionable step, got: %q", summary)
+	}
+}
+
+func TestFindingLinesNoEmbeddedNewlines(t *testing.T) {
+	f := orchestrator.Finding{
+		ID:        "SENT-test1234",
+		Severity:  "high",
+		Category:  "secret",
+		File:      "coverage.go",
+		LineStart: 26,
+		Message:   "Hardcoded credential literal assigned to a secret field.\nSecond line of message.",
+		Engine:    orchestrator.EngineExternal,
+		FixSuggestion: &orchestrator.Fix{
+			Kind: "code_patch",
+			Description: "Rotation Checklist for Hardcoded Credential:\n" +
+				"1. Immediately REVOKE and rotate the exposed credential with the issuing provider\n" +
+				"2. Replace hardcoded literal in coverage.go with an environment variable reference\n" +
+				"3. Add coverage.go to .gitignore\n" +
+				"4. Install pre-commit hook: `sentinel install-hooks`",
+		},
+	}
+
+	lines := findingLines(f)
+	for i, l := range lines {
+		if strings.Contains(l, "\n") || strings.Contains(l, "\r") {
+			t.Errorf("findingLines[%d] contains newline: %q", i, l)
+		}
+	}
+}

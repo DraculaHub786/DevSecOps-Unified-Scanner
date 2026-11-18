@@ -1,5 +1,6 @@
 const express = require('express');
 const rateLimit = require('express-rate-limit');
+const csrf = require('csurf');
 
 const app = express();
 const limiter = rateLimit({
@@ -8,6 +9,7 @@ const limiter = rateLimit({
 });
 
 app.use(limiter);
+app.use(csrf());
 
 app.get('/api/users/:id', (req, res) => {
   const userId = parseInt(req.params.id, 10);

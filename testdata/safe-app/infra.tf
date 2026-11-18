@@ -3,6 +3,7 @@ resource "aws_security_group" "safe" {
   description = "Internal service traffic only"
 
   ingress {
+    description = "Allow inbound HTTPS traffic from VPC CIDR"
     from_port   = 443
     to_port     = 443
     protocol    = "tcp"

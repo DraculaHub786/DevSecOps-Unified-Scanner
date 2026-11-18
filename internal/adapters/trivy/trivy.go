@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -120,7 +119,11 @@ func (a *TrivyAdapter) Run(ctx context.Context, repoPath string, cfg *config.Con
 		return nil, nil
 	}
 
-	binPath, err := exec.LookPath("trivy")
+	if cfg.Engine == "embedded" {
+		return a.runNativeFallback(repoPath, cfg, discovery)
+	}
+
+	binPath, err := adapters.FindToolBinary("trivy")
 	if err != nil || binPath == "" {
 		if cfg.Engine == "external" {
 			return nil, fmt.Errorf("trivy executable not found in PATH and engine is configured as 'external'")
@@ -435,7 +438,7 @@ func isDisallowedLicense(lic string, disallowed []string) bool {
 
 // ScanImage executes a container image vulnerability scan using Trivy.
 func ScanImage(ctx context.Context, imageName string) ([]orchestrator.Finding, error) {
-	binPath, err := exec.LookPath("trivy")
+	binPath, err := adapters.FindToolBinary("trivy")
 	if err != nil || binPath == "" {
 		return nil, fmt.Errorf("trivy is required for container image scanning (install trivy or use docker image)")
 	}
@@ -513,7 +516,7 @@ func GenerateSBOM(ctx context.Context, repoPath, format, outputPath string) erro
 		format = "cyclonedx"
 	}
 
-	binPath, err := exec.LookPath("trivy")
+	binPath, err := adapters.FindToolBinary("trivy")
 	if err == nil && binPath != "" {
 		args := []string{"fs", "--format", format}
 		if outputPath != "" {

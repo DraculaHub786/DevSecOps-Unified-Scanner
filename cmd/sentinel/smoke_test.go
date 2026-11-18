@@ -39,6 +39,7 @@ func newTestRootCmd() *cobra.Command {
 	rootCmd.AddCommand(newConfigCmd())
 	rootCmd.AddCommand(newRulesCmd())
 	rootCmd.AddCommand(newCompletionCmd())
+	rootCmd.AddCommand(newDemoCmd())
 
 	return rootCmd
 }
@@ -49,6 +50,7 @@ func TestCommandSmokeTable(t *testing.T) {
 		args []string
 	}{
 		{"scan help", []string{"scan", "--help"}},
+		{"demo help", []string{"demo", "--help"}},
 		{"secrets help", []string{"secrets", "--help"}},
 		{"deps help", []string{"deps", "--help"}},
 		{"sast help", []string{"sast", "--help"}},
